@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: YourStrongPassword123! # 已修改为强密码，请妥善保管
+      POSTGRES_DB: openclaw
+    ports:
+      # 🚨 只映射到 127.0.0.1（本机），这样公网黑客扫不到，但你的 SSH 通道能连上！
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openclaw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build: .
+    restart: always
+    ports:
+      - "3100:3100"
+    environment:
+      # 数据库连接（内部网络互相访问）
+      - DATABASE_URL=postgresql://postgres:YourStrongPassword123!@db:5432/openclaw?schema=public
+      - PORT=3100
+      
+      # 大模型配置
+      - ARK_API_KEY=""
+      - ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+      - ARK_MODEL="doubao-seed-2-0-pro-260215"
+      - ARK_ENABLE_WEB_SEARCH="true"
+      - ARK_IMAGE_API_KEY="ark-d1372331-0d04-4f65-9786-3f982ad9a127-0de47"
+      - ARK_IMAGE_MODEL="doubao-seedance-1-0-pro-fast-251015"
+      - ARK_IMAGE_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

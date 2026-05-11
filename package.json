@@ -1,0 +1,19 @@
+{
+  "name": "node-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.18.0",
+    "prisma": "^6.18.0"
+  }
+}
