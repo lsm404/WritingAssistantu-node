@@ -365,7 +365,7 @@ const server = http.createServer(async (request, response) => {
         const auth = await requireUser(getAuthToken(request));
         const membership = await getMembershipSummary(auth.user.id);
 
-        if (membership.plan?.code === "monthly_99") {
+        if (membership?.plan?.code === "monthly_99") {
           sendJson(response, 403, { error: "IMAGE_GENERATION_NOT_ALLOWED_FOR_BASIC_PLAN" });
           return;
         }
@@ -563,7 +563,7 @@ const server = http.createServer(async (request, response) => {
         const accountCount = Array.isArray(body?.accounts) ? body.accounts.length : 0;
         
         let limit = 1; // 默认（免费或过期） 1 个
-        if (membership?.isActive && membership.plan) {
+        if (membership?.isActive && membership?.plan) {
           limit = membership.plan.wechatAccountLimit ?? 1;
         }
 
