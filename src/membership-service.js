@@ -11,6 +11,7 @@ function formatPrice(priceCents) {
 }
 
 function sanitizePlan(plan) {
+  if (!plan) return null;
   return {
     id: plan.id,
     code: plan.code,
@@ -22,6 +23,11 @@ function sanitizePlan(plan) {
     isLifetime: plan.isLifetime,
     isActive: plan.isActive,
     sortOrder: plan.sortOrder,
+    textDailyLimit: plan.textDailyLimit,
+    imageMonthlyLimit: plan.imageMonthlyLimit,
+    wechatAccountLimit: plan.wechatAccountLimit,
+    tagline: plan.tagline,
+    features: plan.featuresJson ? JSON.parse(plan.featuresJson) : [],
   };
 }
 
@@ -44,6 +50,17 @@ function sanitizeMembership(row) {
   };
 }
 
+function resolveQuotaLimits(membership) {
+  if (membership?.isActive && membership.plan) {
+    return {
+      source: membership.plan.code,
+      textDaily: membership.plan.textDailyLimit ?? 0,
+      imageMonthly: membership.plan.imageMonthlyLimit ?? 0,
+    };
+  }
+  return { source: "free", textDaily: 0, imageMonthly: 0 };
+}
+
 async function getLatestMembershipRow(userId) {
   return prisma.membership.findFirst({
     where: { userId },
@@ -64,8 +81,14 @@ async function getActiveMembershipRow(userId) {
   });
 }
 
-export async function listAllOrders() {
+export async function listAllOrders(filters = {}) {
+  const where = {};
+  if (filters.agentId) {
+    where.user = { agentId: filters.agentId };
+  }
+
   const rows = await prisma.order.findMany({
+    where,
     orderBy: { createdAt: "desc" },
     include: {
       user: { select: { id: true, email: true, displayName: true } },

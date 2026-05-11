@@ -89,6 +89,11 @@ model Plan {
   isLifetime   Boolean      @default(false) @map("is_lifetime")
   isActive     Boolean      @default(true) @map("is_active")
   sortOrder    Int          @default(0) @map("sort_order")
+  textDailyLimit Int        @default(0) @map("text_daily_limit")
+  imageMonthlyLimit Int     @default(0) @map("image_monthly_limit")
+  wechatAccountLimit Int    @default(0) @map("wechat_account_limit")
+  featuresJson  String?     @map("features_json")
+  tagline       String?
   createdAt    DateTime     @default(now()) @map("created_at")
   updatedAt    DateTime     @updatedAt @map("updated_at")
   memberships  Membership[]

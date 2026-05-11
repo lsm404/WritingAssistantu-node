@@ -19,15 +19,34 @@ if (process.env.NODE_ENV !== "production") {
 
 const DEFAULT_PLANS = [
   {
+    id: "plan-monthly-99",
+    code: "monthly_99",
+    name: "基础月卡",
+    billingType: "monthly",
+    priceCents: 990,
+    durationDays: 30,
+    isLifetime: false,
+    isActive: true,
+    sortOrder: 0,
+    textDailyLimit: 5,
+    imageMonthlyLimit: 0,
+    wechatAccountLimit: 2,
+    tagline: "轻量起步，适合基础文字创作",
+    featuresJson: JSON.stringify(["每天 5 次文字创作", "允许绑定 2 个公众号", "不支持 AI 生图功能"]),
+  },
+  {
     id: "plan-monthly-199",
     code: "monthly_199",
-    name: "基础月卡",
+    name: "基础月卡(旧)",
     billingType: "monthly",
     priceCents: 1990,
     durationDays: 30,
     isLifetime: false,
-    isActive: true,
+    isActive: false,
     sortOrder: 1,
+    textDailyLimit: 5,
+    imageMonthlyLimit: 15,
+    wechatAccountLimit: 2,
   },
   {
     id: "plan-monthly-399",
@@ -39,6 +58,11 @@ const DEFAULT_PLANS = [
     isLifetime: false,
     isActive: true,
     sortOrder: 2,
+    textDailyLimit: 7,
+    imageMonthlyLimit: 30,
+    wechatAccountLimit: 5,
+    tagline: "覆盖稳定更新频率，适合日常持续输出",
+    featuresJson: JSON.stringify(["每天 7 次文字创作", "每月 30 张图片额度", "允许绑定 5 个公众号"]),
   },
   {
     id: "plan-monthly-599",
@@ -50,6 +74,11 @@ const DEFAULT_PLANS = [
     isLifetime: false,
     isActive: true,
     sortOrder: 3,
+    textDailyLimit: 15,
+    imageMonthlyLimit: 60,
+    wechatAccountLimit: 10,
+    tagline: "中高频创作更从容，效率和成本更平衡",
+    featuresJson: JSON.stringify(["每天 15 次文字创作", "每月 60 张图片额度", "允许绑定 10 个公众号"]),
   },
   {
     id: "plan-monthly-990",
@@ -61,10 +90,15 @@ const DEFAULT_PLANS = [
     isLifetime: false,
     isActive: true,
     sortOrder: 4,
+    textDailyLimit: 50,
+    imageMonthlyLimit: 150,
+    wechatAccountLimit: 9999,
+    tagline: "高频深度使用场景，给重度创作留足空间",
+    featuresJson: JSON.stringify(["每天 50 次文字创作", "每月 150 张图片额度", "不限制公众号绑定数量"]),
   },
 ];
 
-const LEGACY_PLAN_CODES = ["trial", "monthly_99", "lifetime_499"];
+const LEGACY_PLAN_CODES = ["trial", "lifetime_499"];
 
 export async function ensureDatabaseSetup() {
   await prisma.$executeRawUnsafe(`
@@ -166,8 +200,28 @@ export async function ensureDatabaseSetup() {
           isLifetime: plan.isLifetime,
           isActive: plan.isActive,
           sortOrder: plan.sortOrder,
+          textDailyLimit: plan.textDailyLimit,
+          imageMonthlyLimit: plan.imageMonthlyLimit,
+          wechatAccountLimit: plan.wechatAccountLimit,
+          featuresJson: plan.featuresJson,
+          tagline: plan.tagline,
         },
-        create: plan,
+        create: {
+          id: plan.id,
+          code: plan.code,
+          name: plan.name,
+          billingType: plan.billingType,
+          priceCents: plan.priceCents,
+          durationDays: plan.durationDays,
+          isLifetime: plan.isLifetime,
+          isActive: plan.isActive,
+          sortOrder: plan.sortOrder,
+          textDailyLimit: plan.textDailyLimit,
+          imageMonthlyLimit: plan.imageMonthlyLimit,
+          wechatAccountLimit: plan.wechatAccountLimit,
+          featuresJson: plan.featuresJson,
+          tagline: plan.tagline,
+        },
       }),
     ),
   );

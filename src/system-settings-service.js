@@ -27,6 +27,8 @@ export const REGISTRATION_POLICY_KEYS = {
 export const QUOTA_FREE_ROLLING_KEYS = {
   textPeriodDays: "quota_free_text_period_days",
   imagePeriodDays: "quota_free_image_period_days",
+  textLimit: "quota_free_text_limit",
+  imageLimit: "quota_free_image_limit",
 };
 
 export async function ensureSystemSettingsTable() {
@@ -209,10 +211,16 @@ export async function getQuotaFreeRollingSettings() {
   return {
     textPeriodDays:
       parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.textPeriodDays], undefined) ||
-      envInt("QUOTA_FREE_TEXT_PERIOD_DAYS", 3),
+      envInt("QUOTA_FREE_TEXT_PERIOD_DAYS", 7),
     imagePeriodDays:
       parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.imagePeriodDays], undefined) ||
       envInt("QUOTA_FREE_IMAGE_PERIOD_DAYS", 7),
+    textLimit:
+      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.textLimit], undefined) ||
+      envInt("QUOTA_FREE_TEXT_LIMIT", 2),
+    imageLimit:
+      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.imageLimit], undefined) ||
+      envInt("QUOTA_FREE_IMAGE_LIMIT", 3),
   };
 }
 
@@ -232,9 +240,24 @@ export async function updateQuotaFreeRollingSettings(payload) {
     365,
   );
 
+  const textLimit = clampInt(
+    "FREE_TEXT_LIMIT",
+    p.textLimit ?? p.text_limit,
+    0,
+    10000,
+  );
+  const imageLimit = clampInt(
+    "FREE_IMAGE_LIMIT",
+    p.imageLimit ?? p.image_limit,
+    0,
+    10000,
+  );
+
   await upsertSystemSettings({
     [QUOTA_FREE_ROLLING_KEYS.textPeriodDays]: String(textPeriodDays),
     [QUOTA_FREE_ROLLING_KEYS.imagePeriodDays]: String(imagePeriodDays),
+    [QUOTA_FREE_ROLLING_KEYS.textLimit]: String(textLimit),
+    [QUOTA_FREE_ROLLING_KEYS.imageLimit]: String(imageLimit),
   });
 
   return getQuotaFreeRollingSettings();

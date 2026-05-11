@@ -4,7 +4,7 @@ import { URL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureDatabaseSetup, getDatabaseUrl } from "./prisma.js";
+import { prisma, ensureDatabaseSetup, getDatabaseUrl } from "./prisma.js";
 import {
   ensureWechatAccountTransportKeys,
   getWechatAccountTransportPublicKeyPem,
@@ -49,7 +49,13 @@ import {
 } from "./system-settings-service.js";
 import { assertUserQuotaAvailable, consumeUserQuota, getUserQuotaSummary } from "./quota-service.js";
 import { computeSubnetKey, getClientIpFromRequest } from "./registration-guard.js";
-import { createAgent, ensureBootstrapAgentIfEmpty, getAgentByUserId, listAgentsWithStats, setAgentStatus } from "./agent-service.js";
+import {
+  createAgent,
+  ensureBootstrapAgentIfEmpty,
+  getAgentByUserId,
+  listAgentsWithStats,
+  updateAgent,
+} from "./agent-service.js";
 import { getUserPrompts, createUserPrompt, updateUserPrompt, deleteUserPrompt } from "./prompt-service.js";
 import { getUserWechatAccounts, replaceUserWechatAccounts } from "./wechat-accounts-service.js";
 
@@ -225,6 +231,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (method === "GET" && pathname === "/api/v1/plans") {
+      const includeInactive = requestUrl.searchParams.get("includeInactive") === "true";
+      const plans = await listPlans(includeInactive);
+      sendJson(response, 200, { plans });
+      return;
+    }
+
     if (method === "GET" && pathname === "/api/v1/licenses") {
       const data = await getLicenseDashboard();
       sendJson(response, 200, data);
@@ -351,6 +364,12 @@ const server = http.createServer(async (request, response) => {
       try {
         const auth = await requireUser(getAuthToken(request));
         const membership = await getMembershipSummary(auth.user.id);
+
+        if (membership.plan?.code === "monthly_99") {
+          sendJson(response, 403, { error: "IMAGE_GENERATION_NOT_ALLOWED_FOR_BASIC_PLAN" });
+          return;
+        }
+
         await assertUserQuotaAvailable(auth.user.id, membership, "image", Number(body?.n || 1));
         const result = await generateImageContent(body ?? {});
         const quota = await consumeUserQuota(auth.user.id, membership, "image", Number(body?.n || 1));
@@ -421,13 +440,6 @@ const server = http.createServer(async (request, response) => {
             : 500;
         sendJson(response, statusCode, { error: message });
       }
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/v1/plans") {
-      sendJson(response, 200, {
-        plans: await listPlans(),
-      });
       return;
     }
 
@@ -545,6 +557,21 @@ const server = http.createServer(async (request, response) => {
       try {
         const auth = await requireUser(getAuthToken(request));
         const body = await readJsonBody(request);
+        
+        // 限制公众号绑定数量
+        const membership = await getMembershipSummary(auth.user.id);
+        const accountCount = Array.isArray(body?.accounts) ? body.accounts.length : 0;
+        
+        let limit = 1; // 默认（免费或过期） 1 个
+        if (membership?.isActive && membership.plan) {
+          limit = membership.plan.wechatAccountLimit ?? 1;
+        }
+
+        if (accountCount > limit) {
+          sendJson(response, 403, { error: `PLAN_WECHAT_LIMIT_EXCEEDED:${limit}` });
+          return;
+        }
+
         const payload = await replaceUserWechatAccounts(auth.user.id, body ?? {});
         sendJson(response, 200, payload);
       } catch (error) {
@@ -759,9 +786,20 @@ const server = http.createServer(async (request, response) => {
 
     if (method === "GET" && pathname === "/api/v1/admin/users") {
       try {
-        await requireAdminAccount(getAuthToken(request));
-        const inviteCode = requestUrl.searchParams.get("inviteCode") || "";
-        const agentId = requestUrl.searchParams.get("agentId") || "";
+        const auth = await requireAdminAccount(getAuthToken(request));
+        let inviteCode = requestUrl.searchParams.get("inviteCode") || "";
+        let agentId = requestUrl.searchParams.get("agentId") || "";
+
+        if (auth.admin.role === "agent") {
+          const agent = await getAgentByUserId(auth.admin.id);
+          if (!agent) {
+            sendJson(response, 403, { error: "AGENT_RECORD_NOT_FOUND" });
+            return;
+          }
+          agentId = agent.id;
+          inviteCode = "";
+        }
+
         sendJson(response, 200, {
           users: await listUsersWithMemberships({ inviteCode, agentId }),
         });
@@ -773,87 +811,22 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (method === "GET" && pathname === "/api/v1/admin/agents") {
-      try {
-        await requireSuperAdmin(getAuthToken(request));
-        sendJson(response, 200, { agents: await listAgentsWithStats() });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "FORBIDDEN";
-        const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
-        sendJson(response, statusCode, { error: message });
-      }
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/v1/admin/agents") {
-      let body;
-      try {
-        body = await readJsonBody(request);
-      } catch (error) {
-        if (error instanceof Error && error.message === "INVALID_JSON") {
-          sendJson(response, 400, { error: "INVALID_JSON" });
-          return;
-        }
-        throw error;
-      }
-      try {
-        await requireSuperAdmin(getAuthToken(request));
-        const row = await createAgent({ name: body?.name });
-        sendJson(response, 201, {
-          ok: true,
-          agent: {
-            id: row.id,
-            name: row.name,
-            inviteCode: row.inviteCode,
-            status: row.status,
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "CREATE_AGENT_FAILED";
-        const statusCode =
-          message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : message === "INVALID_AGENT_NAME" ? 400 : 500;
-        sendJson(response, statusCode, { error: message });
-      }
-      return;
-    }
-
-    const agentStatusMatch = pathname.match(/^\/api\/v1\/admin\/agents\/([^/]+)\/status$/);
-
-    if (method === "PATCH" && agentStatusMatch) {
-      let body;
-      try {
-        body = await readJsonBody(request);
-      } catch (error) {
-        if (error instanceof Error && error.message === "INVALID_JSON") {
-          sendJson(response, 400, { error: "INVALID_JSON" });
-          return;
-        }
-        throw error;
-      }
-      try {
-        await requireSuperAdmin(getAuthToken(request));
-        const agentId = agentStatusMatch[1];
-        await setAgentStatus(agentId, String(body?.status ?? ""));
-        sendJson(response, 200, { ok: true });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "UPDATE_AGENT_FAILED";
-        const statusCode =
-          message === "UNAUTHORIZED"
-            ? 401
-            : message === "FORBIDDEN"
-              ? 403
-              : message === "INVALID_AGENT_STATUS"
-                ? 400
-                : 500;
-        sendJson(response, statusCode, { error: message });
-      }
-      return;
-    }
 
     if (method === "GET" && pathname === "/api/v1/admin/orders") {
       try {
-        await requireAdminAccount(getAuthToken(request));
-        sendJson(response, 200, { orders: await listAllOrders() });
+        const auth = await requireAdminAccount(getAuthToken(request));
+        let agentId = "";
+
+        if (auth.admin.role === "agent") {
+          const agent = await getAgentByUserId(auth.admin.id);
+          if (!agent) {
+            sendJson(response, 403, { error: "AGENT_RECORD_NOT_FOUND" });
+            return;
+          }
+          agentId = agent.id;
+        }
+
+        sendJson(response, 200, { orders: await listAllOrders({ agentId }) });
       } catch (error) {
         const message = error instanceof Error ? error.message : "FORBIDDEN";
         const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
@@ -1029,7 +1002,7 @@ const server = http.createServer(async (request, response) => {
         }
 
         try {
-          await requireAdminAccount(getAuthToken(request));
+          await requireSuperAdmin(getAuthToken(request));
           const membership = await adminGrantMembership(userId, body?.planCode);
           sendJson(response, 200, { ok: true, membership });
         } catch (error) {
@@ -1043,7 +1016,7 @@ const server = http.createServer(async (request, response) => {
 
       if (method === "DELETE") {
         try {
-          await requireAdminAccount(getAuthToken(request));
+          await requireSuperAdmin(getAuthToken(request));
           const result = await adminRevokeMembership(userId);
           sendJson(response, 200, { ok: true, ...result });
         } catch (error) {
@@ -1069,7 +1042,8 @@ const server = http.createServer(async (request, response) => {
       }
 
       try {
-        await requireAdminAccount(getAuthToken(request));
+        await requireSuperAdmin(getAuthToken(request));
+
         const result = await adminSetUserStatus(userId, body?.status);
         sendJson(response, 200, { ok: true, user: result.user });
       } catch (error) {
@@ -1077,6 +1051,54 @@ const server = http.createServer(async (request, response) => {
         const statusCode =
           message === "UNAUTHORIZED" ? 401 : message === "INVALID_STATUS" ? 400 : 500;
         sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    // ===== Admin Overview =====
+    if (method === "GET" && pathname === "/api/v1/admin/overview") {
+      try {
+        const auth = await requireAdminAccount(getAuthToken(request));
+
+        if (auth.admin.role === "agent") {
+          const agent = await getAgentByUserId(auth.admin.id);
+          if (!agent) {
+            sendJson(response, 403, { error: "AGENT_RECORD_NOT_FOUND" });
+            return;
+          }
+
+          const userCount = await prisma.user.count({ where: { agentId: agent.id } });
+          const orderCount = await prisma.order.count({
+            where: { user: { agentId: agent.id }, status: "paid" },
+          });
+
+          sendJson(response, 200, {
+            role: "agent",
+            inviteCode: agent.inviteCode,
+            stats: {
+              userCount,
+              orderCount,
+            },
+          });
+        } else {
+          // 超管概览
+          const userCount = await prisma.user.count();
+          const orderCount = await prisma.order.count({ where: { status: "paid" } });
+          const agentCount = await prisma.agent.count();
+
+          sendJson(response, 200, {
+            role: "super_admin",
+            stats: {
+              userCount,
+              orderCount,
+              agentCount,
+            },
+          });
+        }
+      } catch (error) {
+        console.error("[server.js] Overview fetch error:", error);
+        const message = error instanceof Error ? error.message : "FETCH_OVERVIEW_FAILED";
+        sendJson(response, message === "UNAUTHORIZED" ? 401 : 500, { error: message });
       }
       return;
     }
@@ -1098,11 +1120,56 @@ const server = http.createServer(async (request, response) => {
       try {
         await requireSuperAdmin(getAuthToken(request));
         const body = await readJsonBody(request);
-        const agent = await createAgent({ name: body?.name });
+        console.log("[server.js] DEBUG - Parsed Body:", body);
+        
+        const agent = await createAgent({ 
+          name: body.name, 
+          email: body.email, 
+          password: body.password 
+        });
         sendJson(response, 200, agent);
       } catch (error) {
+        console.error("[server.js] Agent creation error:", error);
         const message = error instanceof Error ? error.message : "CREATE_AGENT_FAILED";
         sendJson(response, 400, { error: message });
+      }
+      return;
+    }
+
+    if (method === "PATCH" && pathname.startsWith("/api/v1/admin/plans/")) {
+      try {
+        await requireSuperAdmin(getAuthToken(request));
+        const planId = pathname.split("/").filter(Boolean).pop();
+        const body = await readJsonBody(request);
+        console.log(`[server.js] Updating plan with ID/Code: "${planId}"`, body);
+
+        // 先尝试按 ID 找，找不到按 Code 找
+        let plan = await prisma.plan.findUnique({ where: { id: planId } });
+        if (!plan) {
+          plan = await prisma.plan.findUnique({ where: { code: planId } });
+        }
+
+        if (!plan) {
+          throw new Error(`PLAN_NOT_FOUND: ${planId}`);
+        }
+
+        const updated = await prisma.plan.update({
+          where: { id: plan.id },
+          data: {
+            name: body.name,
+            priceCents: body.priceCents,
+            isActive: body.isActive,
+            textDailyLimit: body.textDailyLimit,
+            imageMonthlyLimit: body.imageMonthlyLimit,
+            wechatAccountLimit: body.wechatAccountLimit,
+            tagline: body.tagline,
+            featuresJson: Array.isArray(body.features) ? JSON.stringify(body.features) : undefined,
+          },
+        });
+
+        sendJson(response, 200, { ok: true, plan: updated });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
       }
       return;
     }
@@ -1112,7 +1179,7 @@ const server = http.createServer(async (request, response) => {
         await requireSuperAdmin(getAuthToken(request));
         const agentId = pathname.split("/").pop();
         const body = await readJsonBody(request);
-        const agent = await setAgentStatus(agentId, body?.status);
+        const agent = await updateAgent(agentId, { name: body?.name, status: body?.status });
         sendJson(response, 200, agent);
       } catch (error) {
         const message = error instanceof Error ? error.message : "UPDATE_AGENT_FAILED";

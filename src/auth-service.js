@@ -50,6 +50,7 @@ function sanitizeUser(user) {
     signupInviteCode: user.signupInviteCode ?? null,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
+    ownedAgent: user.ownedAgent ? { inviteCode: user.ownedAgent.inviteCode } : undefined,
   };
 }
 
@@ -198,37 +199,84 @@ export async function loginUser({ email, password }) {
 }
 
 export async function loginAdmin({ phone, password }) {
-  const normalizedPhone = String(phone || "").trim();
+  const account = String(phone || "").trim();
   const rawPassword = String(password || "");
 
+  // 1. 优先在 Admin 表查找（超级管理员）
   const admin = await prisma.admin.findUnique({
-    where: { phone: normalizedPhone },
-  });
-  if (!admin || !verifyPassword(rawPassword, admin.passwordHash)) {
-    throw new Error("INVALID_CREDENTIALS");
-  }
-  if (admin.status !== "active") {
-    throw new Error("ADMIN_DISABLED");
-  }
-
-  const token = randomBytes(32).toString("hex");
-  const stamp = nowIso();
-  const expiresAt = addDays(stamp, SESSION_TTL_DAYS);
-
-  await prisma.adminSession.create({
-    data: {
-      adminId: admin.id,
-      tokenHash: hashToken(token),
-      expiresAt: new Date(expiresAt),
-      createdAt: new Date(stamp),
-    },
+    where: { phone: account },
   });
 
-  return {
-    token,
-    expiresAt,
-    admin: sanitizeAdmin(admin),
-  };
+  if (admin) {
+    if (!verifyPassword(rawPassword, admin.passwordHash)) {
+      throw new Error("INVALID_CREDENTIALS");
+    }
+    if (admin.status !== "active") {
+      throw new Error("ADMIN_DISABLED");
+    }
+
+    const token = randomBytes(32).toString("hex");
+    const stamp = nowIso();
+    const expiresAt = addDays(stamp, SESSION_TTL_DAYS);
+
+    await prisma.adminSession.create({
+      data: {
+        adminId: admin.id,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(expiresAt),
+        createdAt: new Date(stamp),
+      },
+    });
+
+    return {
+      token,
+      expiresAt,
+      admin: sanitizeAdmin(admin),
+    };
+  }
+
+  // 2. 如果没找到，尝试在 User 表查找（代理商账号）
+  const user = await prisma.user.findUnique({
+    where: { email: account.toLowerCase() },
+    include: { ownedAgent: true },
+  });
+
+  if (user && (user.role === "agent" || user.role === "admin")) {
+    if (!verifyPassword(rawPassword, user.passwordHash)) {
+      throw new Error("INVALID_CREDENTIALS");
+    }
+    if (user.status !== "active") {
+      throw new Error("USER_DISABLED");
+    }
+
+    const token = randomBytes(32).toString("hex");
+    const stamp = nowIso();
+    const expiresAt = addDays(stamp, SESSION_TTL_DAYS);
+
+    await prisma.session.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(expiresAt),
+        createdAt: new Date(stamp),
+      },
+    });
+
+    return {
+      token,
+      expiresAt,
+      admin: {
+        id: user.id,
+        phone: user.email, // 这里的 phone 字段作为标识符透传
+        displayName: user.displayName,
+        role: user.role,
+        status: user.status,
+        inviteCode: user.ownedAgent?.inviteCode,
+      },
+    };
+  }
+
+  throw new Error("INVALID_CREDENTIALS");
 }
 
 export async function getSessionUser(token) {
@@ -239,7 +287,7 @@ export async function getSessionUser(token) {
   const tokenHash = hashToken(token);
   const session = await prisma.session.findUnique({
     where: { tokenHash },
-    include: { user: true },
+    include: { user: { include: { ownedAgent: true } } },
   });
   if (!session) {
     return null;
@@ -335,10 +383,27 @@ export async function adminSetUserStatus(userId, status) {
 
 export async function requireAdminAccount(token) {
   const sessionAdmin = await getSessionAdmin(token);
-  if (!sessionAdmin) {
-    throw new Error("UNAUTHORIZED");
+  if (sessionAdmin) {
+    return sessionAdmin;
   }
-  return sessionAdmin;
+
+  // 尝试从普通用户 Session 中查找代理商身份
+  const sessionUser = await getSessionUser(token);
+  if (sessionUser && (sessionUser.user.role === "agent" || sessionUser.user.role === "admin")) {
+    return {
+      admin: {
+        id: sessionUser.user.id,
+        phone: sessionUser.user.email,
+        displayName: sessionUser.user.displayName,
+        role: sessionUser.user.role,
+        status: sessionUser.user.status,
+        inviteCode: sessionUser.user.ownedAgent?.inviteCode,
+      },
+      session: sessionUser.session,
+    };
+  }
+
+  throw new Error("UNAUTHORIZED");
 }
 
 // ===== Model Configuration =====

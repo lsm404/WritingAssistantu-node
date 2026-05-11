@@ -2,16 +2,11 @@ import { prisma } from "./prisma.js";
 import { getQuotaFreeRollingSettings } from "./system-settings-service.js";
 
 const FREE_EXPERIENCE_LIMITS = {
-  textDaily: 3,
+  textDaily: 2,
   imageMonthly: 3,
 };
 
-const PLAN_LIMITS = {
-  monthly_199: { textDaily: 5, imageMonthly: 15 },
-  monthly_399: { textDaily: 10, imageMonthly: 35 },
-  monthly_599: { textDaily: 15, imageMonthly: 50 },
-  monthly_990: { textDaily: 25, imageMonthly: 90 },
-};
+// PLAN_LIMITS are now fetched from database via membership.plan
 
 function getTodayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
@@ -22,10 +17,11 @@ function getMonthKey(date = new Date()) {
 }
 
 function resolveQuotaLimits(membership) {
-  if (membership?.isActive && membership.plan?.code && PLAN_LIMITS[membership.plan.code]) {
+  if (membership?.isActive && membership.plan) {
     return {
       source: membership.plan.code,
-      ...PLAN_LIMITS[membership.plan.code],
+      textDaily: membership.plan.textDailyLimit ?? 0,
+      imageMonthly: membership.plan.imageMonthlyLimit ?? 0,
     };
   }
 
@@ -267,9 +263,14 @@ export async function getUserQuotaSummary(userId, membership) {
     userId,
   );
 
-  const limits = resolveQuotaLimits(membership);
+  let limits = resolveQuotaLimits(membership);
   const freePolicy =
     limits.source === "free_experience" ? await getQuotaFreeRollingSettings() : null;
+
+  if (freePolicy) {
+    limits.textDaily = freePolicy.textLimit;
+    limits.imageMonthly = freePolicy.imageLimit;
+  }
 
   const normalized = normalizeQuotaRowWithPolicy(
     rows[0] ?? { userId, textUsed: 0, textDate: "", imageUsed: 0, imageMonth: "" },
@@ -302,9 +303,14 @@ export async function consumeUserQuota(userId, membership, kind, amount = 1) {
     throw new Error("INVALID_QUOTA_AMOUNT");
   }
 
-  const limits = resolveQuotaLimits(membership);
+  let limits = resolveQuotaLimits(membership);
   const freePolicy =
     limits.source === "free_experience" ? await getQuotaFreeRollingSettings() : null;
+
+  if (freePolicy) {
+    limits.textDaily = freePolicy.textLimit;
+    limits.imageMonthly = freePolicy.imageLimit;
+  }
 
   return prisma.$transaction(async (tx) => {
     const rawRow = await getRawUserQuota(tx, userId);

@@ -1,5 +1,11 @@
-import { randomInt } from "node:crypto";
+import { randomInt, scryptSync, randomBytes } from "node:crypto";
 import { prisma } from "./prisma.js";
+
+// 简单的哈希函数（与 auth-service 保持一致）
+function hashPassword(password, salt = randomBytes(16).toString("hex")) {
+  const derived = scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${derived}`;
+}
 
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -52,6 +58,7 @@ export async function ensureBootstrapAgentIfEmpty() {
 export async function listAgentsWithStats() {
   const rows = await prisma.agent.findMany({
     orderBy: { createdAt: "desc" },
+    include: { owner: true },
   });
 
   const grouped = await prisma.user.groupBy({
@@ -67,6 +74,7 @@ export async function listAgentsWithStats() {
   return rows.map((a) => ({
     id: a.id,
     name: a.name,
+    email: a.owner?.email ?? "无账号",
     inviteCode: a.inviteCode,
     status: a.status,
     createdAt: a.createdAt.toISOString(),
@@ -75,15 +83,59 @@ export async function listAgentsWithStats() {
   }));
 }
 
-export async function createAgent({ name }) {
-  const trimmed = String(name || "").trim();
-  if (!trimmed) throw new Error("INVALID_AGENT_NAME");
+export async function createAgent({ name, email, password }) {
+  console.log("[agent-service] createAgent received:", { name, email, password: password ? "***" : "empty" });
+  
+  const trimmedName = String(name || "").trim();
+  const trimmedEmail = String(email || "").trim().toLowerCase();
+  
+  if (!trimmedName) throw new Error("INVALID_AGENT_NAME");
+  if (!trimmedEmail) throw new Error("INVALID_EMAIL");
+  if (!password || password.length < 6) throw new Error("PASSWORD_TOO_SHORT");
 
   return prisma.$transaction(async (tx) => {
+    // 1. 获取或创建关联的用户账号
+    let user = await tx.user.findUnique({ where: { email: trimmedEmail } });
+    
+    if (user) {
+      // 如果用户已存在，将其角色更新为 agent
+      user = await tx.user.update({
+        where: { id: user.id },
+        data: {
+          role: "agent",
+          passwordHash: hashPassword(password), // 管理员设置新密码
+          displayName: trimmedName || user.displayName,
+        }
+      });
+      console.log(`[agent-service] User ${trimmedEmail} already exists, promoting to agent`);
+    } else {
+      // 如果不存在，创建新用户
+      user = await tx.user.create({
+        data: {
+          email: trimmedEmail,
+          passwordHash: hashPassword(password),
+          displayName: trimmedName,
+          role: "agent",
+          status: "active",
+        },
+      });
+      console.log(`[agent-service] Created new user ${trimmedEmail} for agent`);
+    }
+
+    // 2. 生成唯一的邀请码
     const inviteCode = await generateUniqueInviteCode(tx);
-    return tx.agent.create({
-      data: {
-        name: trimmed,
+
+    // 3. 创建或更新代理记录 (使用 upsert)
+    return await tx.agent.upsert({
+      where: { userId: user.id },
+      update: {
+        name: trimmedName,
+        inviteCode,
+        status: "active",
+      },
+      create: {
+        userId: user.id,
+        name: trimmedName,
         inviteCode,
         status: "active",
       },
@@ -115,10 +167,16 @@ export async function getAgentByUserId(userId) {
   });
 }
 
-export async function setAgentStatus(agentId, status) {
-  if (!["active", "disabled"].includes(status)) throw new Error("INVALID_AGENT_STATUS");
+export async function updateAgent(agentId, { name, status }) {
+  const data = { updatedAt: new Date() };
+  if (name !== undefined) data.name = String(name).trim();
+  if (status !== undefined) {
+    if (!["active", "disabled"].includes(status)) throw new Error("INVALID_AGENT_STATUS");
+    data.status = status;
+  }
+  
   return prisma.agent.update({
     where: { id: String(agentId) },
-    data: { status, updatedAt: new Date() },
+    data,
   });
 }
