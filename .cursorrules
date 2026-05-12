@@ -1,0 +1,7 @@
+# Cursor AI 规则
+
+## 提交信息语言
+
+When generating commit messages, always use Chinese.
+
+当你生成提交信息时，请始终使用中文。

@@ -1,6 +1,8 @@
 import { randomInt, scryptSync, randomBytes } from "node:crypto";
 import { prisma } from "./prisma.js";
 
+export const DEFAULT_MEMBERSHIP_CONTACT_WECHAT = "Jiale-8888888";
+
 // 简单的哈希函数（与 auth-service 保持一致）
 function hashPassword(password, salt = randomBytes(16).toString("hex")) {
   const derived = scryptSync(password, salt, 64).toString("hex");
@@ -76,6 +78,7 @@ export async function listAgentsWithStats() {
     name: a.name,
     email: a.owner?.email ?? "无账号",
     inviteCode: a.inviteCode,
+    contactWechat: a.contactWechat ?? "",
     status: a.status,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
@@ -83,11 +86,12 @@ export async function listAgentsWithStats() {
   }));
 }
 
-export async function createAgent({ name, email, password }) {
+export async function createAgent({ name, email, password, contactWechat }) {
   console.log("[agent-service] createAgent received:", { name, email, password: password ? "***" : "empty" });
   
   const trimmedName = String(name || "").trim();
   const trimmedEmail = String(email || "").trim().toLowerCase();
+  const trimmedContactWechat = String(contactWechat || "").trim();
   
   if (!trimmedName) throw new Error("INVALID_AGENT_NAME");
   if (!trimmedEmail) throw new Error("INVALID_EMAIL");
@@ -131,12 +135,14 @@ export async function createAgent({ name, email, password }) {
       update: {
         name: trimmedName,
         inviteCode,
+        contactWechat: trimmedContactWechat,
         status: "active",
       },
       create: {
         userId: user.id,
         name: trimmedName,
         inviteCode,
+        contactWechat: trimmedContactWechat,
         status: "active",
       },
     });
@@ -167,9 +173,10 @@ export async function getAgentByUserId(userId) {
   });
 }
 
-export async function updateAgent(agentId, { name, status }) {
+export async function updateAgent(agentId, { name, status, contactWechat }) {
   const data = { updatedAt: new Date() };
   if (name !== undefined) data.name = String(name).trim();
+  if (contactWechat !== undefined) data.contactWechat = String(contactWechat || "").trim();
   if (status !== undefined) {
     if (!["active", "disabled"].includes(status)) throw new Error("INVALID_AGENT_STATUS");
     data.status = status;
@@ -179,4 +186,25 @@ export async function updateAgent(agentId, { name, status }) {
     where: { id: String(agentId) },
     data,
   });
+}
+
+export async function getMembershipContactWechatForUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: String(userId) },
+    select: {
+      invitedBy: {
+        select: {
+          status: true,
+          contactWechat: true,
+        },
+      },
+    },
+  });
+
+  const agentWechat = String(user?.invitedBy?.contactWechat || "").trim();
+  if (user?.invitedBy?.status === "active" && agentWechat) {
+    return agentWechat;
+  }
+
+  return DEFAULT_MEMBERSHIP_CONTACT_WECHAT;
 }

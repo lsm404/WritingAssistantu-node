@@ -8,6 +8,10 @@ const FREE_EXPERIENCE_LIMITS = {
 
 // PLAN_LIMITS are now fetched from database via membership.plan
 
+function resolvePaidTextMonthlyLimit(textDailyLimit) {
+  return Math.max(Number(textDailyLimit || 0), 0) * 30;
+}
+
 function getTodayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -20,7 +24,7 @@ function resolveQuotaLimits(membership) {
   if (membership?.isActive && membership.plan) {
     return {
       source: membership.plan.code,
-      textDaily: membership.plan.textDailyLimit ?? 0,
+      textMonthly: resolvePaidTextMonthlyLimit(membership.plan.textDailyLimit),
       imageMonthly: membership.plan.imageMonthlyLimit ?? 0,
     };
   }
@@ -68,8 +72,8 @@ function normalizeQuotaRowWithPolicy(row, now, freePolicy) {
   if (!freePolicy) {
     return {
       userId: row.userId,
-      textUsed: row.textDate === todayKey ? row.textUsed : 0,
-      textDate: todayKey,
+      textUsed: row.textDate === monthKey ? row.textUsed : 0,
+      textDate: monthKey,
       imageUsed: row.imageMonth === monthKey ? row.imageUsed : 0,
       imageMonth: monthKey,
     };
@@ -117,15 +121,7 @@ function ymdToUtcStartIso(ymd) {
   return new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)).toISOString();
 }
 
-/** 付费：下一 UTC 自然日 0 点起重新计文章额度 */
-function nextUtcMidnightAfterTodayIso(now = new Date()) {
-  const y = now.getUTCFullYear();
-  const mo = now.getUTCMonth();
-  const day = now.getUTCDate();
-  return new Date(Date.UTC(y, mo, day + 1, 0, 0, 0, 0)).toISOString();
-}
-
-/** 付费：下个月 1 日 UTC 0 点起重新计配图额度 */
+/** 付费：下个月 1 日 UTC 0 点起重新计文章和配图额度 */
 function firstDayNextMonthUtcStartIso(now = new Date()) {
   const y = now.getUTCFullYear();
   const m = now.getUTCMonth();
@@ -145,7 +141,7 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
   const textReset =
     freePolicy != null
       ? { resetMode: "rolling_days", resetEveryDays: freePolicy.textPeriodDays }
-      : { resetMode: "calendar_day", resetEveryDays: 1 };
+      : { resetMode: "calendar_month", resetEveryDays: null };
   const imageReset =
     freePolicy != null
       ? { resetMode: "rolling_days", resetEveryDays: freePolicy.imagePeriodDays }
@@ -167,7 +163,7 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
       imageQuotaRefreshAt = ymdToUtcStartIso(nextImgYmd);
     }
   } else {
-    textQuotaRefreshAt = nextUtcMidnightAfterTodayIso(now);
+    textQuotaRefreshAt = firstDayNextMonthUtcStartIso(now);
     imageQuotaRefreshAt = firstDayNextMonthUtcStartIso(now);
   }
 
@@ -175,9 +171,9 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
     source: limits.source,
     usesFreeRollingWindows: Boolean(freePolicy),
     text: {
-      limit: limits.textDaily,
+      limit: freePolicy ? limits.textDaily : limits.textMonthly,
       used: normalized.textUsed,
-      remaining: Math.max(limits.textDaily - normalized.textUsed, 0),
+      remaining: Math.max((freePolicy ? limits.textDaily : limits.textMonthly) - normalized.textUsed, 0),
       periodKey: normalized.textDate,
       quotaRefreshAt: textQuotaRefreshAt,
       ...textReset,
@@ -317,7 +313,8 @@ export async function consumeUserQuota(userId, membership, kind, amount = 1) {
     const normalized = normalizeQuotaRowWithPolicy(rawRow, new Date(), freePolicy);
 
     if (kind === "text") {
-      const remaining = Math.max(limits.textDaily - normalized.textUsed, 0);
+      const textLimit = freePolicy ? limits.textDaily : limits.textMonthly;
+      const remaining = Math.max(textLimit - normalized.textUsed, 0);
       if (remaining < amount) {
         throw new Error("TEXT_QUOTA_EXCEEDED");
       }

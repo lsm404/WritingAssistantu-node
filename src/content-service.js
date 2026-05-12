@@ -264,30 +264,65 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">");
+}
+
+function stripLeadingTitleHeading(markdown) {
+  return String(markdown || "").replace(/^\s*#\s+.+(?:\r?\n)+(?:\s*\r?\n)*/u, "");
+}
+
 function renderInlineMarkdown(text) {
   return escapeHtml(text)
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, src) => {
+      const safeAlt = escapeHtml(String(alt || "").trim());
+      const safeSrc = String(src || "").trim();
+      return `<img src="${safeSrc}" alt="${safeAlt}" />`;
+    })
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, href) => {
+      const safeLabel = escapeHtml(String(label || "").trim());
+      const safeHref = String(href || "").trim();
+      return `<a href="${safeHref}">${safeLabel}</a>`;
+    })
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/&lt;br\s*\/?&gt;/gi, "<br />");
 }
 
 function markdownToHtml(markdown) {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const lines = stripLeadingTitleHeading(markdown).replace(/\r\n/g, "\n").split("\n");
   const html = [];
   let paragraph = [];
   let listType = "";
   let listItems = [];
   let inCode = false;
   let codeLines = [];
+  let pendingBlankLines = 0;
+
+  const flushBlankLines = () => {
+    if (pendingBlankLines <= 0) return;
+    for (let i = 0; i < pendingBlankLines; i += 1) {
+      html.push("<p><br /></p>");
+    }
+    pendingBlankLines = 0;
+  };
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
+    flushBlankLines();
     html.push(`<p>${renderInlineMarkdown(paragraph.join("<br />"))}</p>`);
     paragraph = [];
   };
 
   const flushList = () => {
     if (!listItems.length || !listType) return;
+    flushBlankLines();
     const items = listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("");
     html.push(`<${listType}>${items}</${listType}>`);
     listItems = [];
@@ -296,6 +331,7 @@ function markdownToHtml(markdown) {
 
   const flushCode = () => {
     if (!inCode) return;
+    flushBlankLines();
     html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
     inCode = false;
     codeLines = [];
@@ -324,11 +360,13 @@ function markdownToHtml(markdown) {
     if (!trimmed) {
       flushParagraph();
       flushList();
+      pendingBlankLines += 1;
       continue;
     }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
+      flushBlankLines();
       flushParagraph();
       flushList();
       const level = headingMatch[1].length;
@@ -360,6 +398,7 @@ function markdownToHtml(markdown) {
 
     const blockquoteMatch = trimmed.match(/^>\s?(.+)$/);
     if (blockquoteMatch) {
+      flushBlankLines();
       flushParagraph();
       flushList();
       html.push(`<blockquote><p>${renderInlineMarkdown(blockquoteMatch[1])}</p></blockquote>`);
@@ -376,33 +415,177 @@ function markdownToHtml(markdown) {
   return html.join("\n");
 }
 
+function isWechatHostedImageUrl(urlString) {
+  try {
+    const { hostname } = new URL(urlString);
+    return /(mmbiz\.qpic\.cn|mmbiz\.qlogo\.cn)$/i.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function guessFilenameFromUrl(urlString, contentType) {
+  try {
+    const url = new URL(urlString);
+    const pathname = url.pathname || "";
+    const tail = pathname.split("/").pop() || "";
+    if (tail && /\.[a-z0-9]{2,5}$/i.test(tail)) {
+      return tail.slice(0, 120);
+    }
+  } catch {
+    // fall through to content-type based name
+  }
+
+  const extByType = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/bmp": "bmp",
+  };
+  const ext = extByType[String(contentType || "").toLowerCase()] || "jpg";
+  return `wechat-article-image.${ext}`;
+}
+
+async function uploadWechatArticleImageFromUrl(imageUrl, accessToken, config) {
+  const normalizedImageUrl = decodeHtmlEntities(imageUrl);
+  const upstream = await fetch(normalizedImageUrl);
+  if (!upstream.ok) {
+    throw new Error(`WECHAT_ARTICLE_IMAGE_FETCH_FAILED:${upstream.status}`);
+  }
+
+  const contentType = upstream.headers.get("content-type") || "image/jpeg";
+  if (!contentType.toLowerCase().startsWith("image/")) {
+    throw new Error(`WECHAT_ARTICLE_IMAGE_INVALID_CONTENT_TYPE:${contentType}`);
+  }
+
+  const imageBlob = await upstream.blob();
+  const formData = new FormData();
+  formData.append("media", imageBlob, guessFilenameFromUrl(normalizedImageUrl, contentType));
+
+  const url = new URL(`${config.baseUrl.replace(/\/$/, "")}/cgi-bin/media/uploadimg`);
+  url.search = new URLSearchParams({
+    access_token: accessToken,
+  }).toString();
+
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.url) {
+    throw new Error(data.errmsg || data.message || `WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED:${data.errcode || response.status}`);
+  }
+
+  return data.url;
+}
+
+async function replaceExternalImagesForWechat(html, accessToken, config) {
+  const imageSrcPattern = /(<img\b[^>]*?\bsrc\s*=\s*)(["'])(.*?)\2/gi;
+  const seen = new Map();
+  let hadMatch = false;
+
+  const rewrittenParts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = imageSrcPattern.exec(html)) !== null) {
+    hadMatch = true;
+    const [fullMatch, prefix, quote, rawSrc] = match;
+    const matchStart = match.index;
+    const matchEnd = matchStart + fullMatch.length;
+    rewrittenParts.push(html.slice(lastIndex, matchStart));
+
+    const src = String(rawSrc || "").trim();
+    let replacementSrc = src;
+
+    if (/^https?:\/\//i.test(src) && !isWechatHostedImageUrl(src)) {
+      if (!seen.has(src)) {
+        seen.set(src, uploadWechatArticleImageFromUrl(src, accessToken, config));
+      }
+      try {
+        replacementSrc = await seen.get(src);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED";
+        throw new Error(`${message}:${src}`);
+      }
+    }
+
+    rewrittenParts.push(`${prefix}${quote}${replacementSrc}${quote}`);
+    lastIndex = matchEnd;
+  }
+
+  if (!hadMatch) {
+    return html;
+  }
+
+  rewrittenParts.push(html.slice(lastIndex));
+  return rewrittenParts.join("");
+}
+
 function wrapWechatHtml(contentHtml) {
   return `
-<div class="openclaw-article" style="font-size:16px;line-height:1.75;color:#333333;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:12px 0;">
+<div class="openclaw-article" style="font-size:16px;line-height:1.9;color:#2c2c2c;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:12px 0;">
   <style>
     .openclaw-article h1, .openclaw-article h2, .openclaw-article h3 {
       font-weight: 600;
       color: #111111;
-      margin: 1.4em 0 0.6em;
+      line-height: 1.5;
+      margin: 1.5em 0 0.75em;
     }
-    .openclaw-article h1 { font-size: 22px; }
+    .openclaw-article h1 {
+      font-size: 22px;
+      text-align: left;
+    }
     .openclaw-article h2 {
       font-size: 20px;
       border-left: 4px solid #1890ff;
-      padding-left: 8px;
+      padding-left: 10px;
     }
     .openclaw-article h3 { font-size: 18px; }
-    .openclaw-article p { margin: 0.8em 0; }
+    .openclaw-article p {
+      margin: 1.05em 0 0;
+      line-height: 1.9;
+      text-align: justify;
+      letter-spacing: 0.02em;
+      word-break: break-word;
+    }
+    .openclaw-article p:first-child {
+      margin-top: 0;
+    }
+    .openclaw-article p br {
+      display: block;
+      margin-top: 0.9em;
+    }
     .openclaw-article ul, .openclaw-article ol {
       padding-left: 1.4em;
-      margin: 0.6em 0;
+      margin: 0.9em 0;
+      line-height: 1.9;
+    }
+    .openclaw-article li + li {
+      margin-top: 0.35em;
     }
     .openclaw-article strong { color: #111111; }
     .openclaw-article blockquote {
       border-left: 3px solid #e6e6e6;
-      padding-left: 10px;
+      padding-left: 12px;
       color: #666666;
-      margin: 1em 0;
+      margin: 1.1em 0;
+    }
+    .openclaw-article blockquote p {
+      margin-top: 0.6em;
+    }
+    .openclaw-article img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 1.2em auto;
+    }
+    .openclaw-article a {
+      color: #576b95;
+      text-decoration: none;
+      word-break: break-all;
     }
     .openclaw-article code {
       background: #f5f5f5;
@@ -461,12 +644,24 @@ export async function createWechatDraft(payload) {
     throw new Error("WECHAT_THUMB_MEDIA_ID_MISSING");
   }
 
+  if (!payload.title?.trim()) {
+    throw new Error("TITLE_REQUIRED");
+  }
+
+  const contentMd = String(payload.content_md || "");
+  const contentHtmlInput = String(payload.content_html || "").trim();
+  if (!contentMd.trim() && !contentHtmlInput) {
+    throw new Error("CONTENT_REQUIRED");
+  }
+
   const accessToken = await getWechatAccessToken(config);
-  const contentHtml = wrapWechatHtml(markdownToHtml(payload.content_md || ""));
+  const baseHtml = contentHtmlInput || markdownToHtml(contentMd);
+  const normalizedHtml = await replaceExternalImagesForWechat(baseHtml, accessToken, config);
+  const contentHtml = wrapWechatHtml(normalizedHtml);
   const requestBody = {
     articles: [
       {
-        title: payload.title?.trim() || "",
+        title: payload.title.trim(),
         author: payload.author?.trim() || "",
         digest: payload.digest?.trim() || "",
         content: contentHtml,
@@ -476,14 +671,6 @@ export async function createWechatDraft(payload) {
       },
     ],
   };
-
-  if (!requestBody.articles[0].title) {
-    throw new Error("TITLE_REQUIRED");
-  }
-
-  if (!(payload.content_md || "").trim()) {
-    throw new Error("CONTENT_REQUIRED");
-  }
 
   const url = new URL(`${config.baseUrl.replace(/\/$/, "")}/cgi-bin/draft/add`);
   url.search = new URLSearchParams({

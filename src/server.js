@@ -1,5 +1,6 @@
 import "dotenv/config";
 import http from "node:http";
+import os from "node:os";
 import { URL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,6 +54,7 @@ import {
   createAgent,
   ensureBootstrapAgentIfEmpty,
   getAgentByUserId,
+  getMembershipContactWechatForUser,
   listAgentsWithStats,
   updateAgent,
 } from "./agent-service.js";
@@ -172,6 +174,61 @@ function readJsonBody(request) {
   });
 }
 
+function getLocalIpv4Addresses() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+
+  for (const records of Object.values(interfaces)) {
+    for (const record of records || []) {
+      if (!record) continue;
+      const family = typeof record.family === "string" ? record.family : String(record.family);
+      if (family !== "IPv4" || record.internal) continue;
+      addresses.push(record.address);
+    }
+  }
+
+  return [...new Set(addresses)];
+}
+
+async function getPublicIpAddress() {
+  const providers = [
+    {
+      url: "https://api.ipify.org?format=json",
+      parse: async (response) => {
+        const data = await response.json();
+        return String(data?.ip || "").trim();
+      },
+    },
+    {
+      url: "https://checkip.amazonaws.com/",
+      parse: async (response) => {
+        const text = await response.text();
+        return text.trim();
+      },
+    },
+  ];
+
+  for (const provider of providers) {
+    try {
+      const response = await fetch(provider.url, {
+        method: "GET",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const ip = await provider.parse(response);
+      if (ip) {
+        return ip;
+      }
+    } catch {
+      // try the next provider
+    }
+  }
+
+  return "";
+}
+
 async function readMultipartForm(request) {
   const webRequest = new Request("http://localhost/upload", {
     method: request.method || "POST",
@@ -190,7 +247,7 @@ const server = http.createServer(async (request, response) => {
   response.setHeader("Access-Control-Allow-Origin", "*");
   response.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Device-Id",
+    "Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Device-Id, Cache-Control, Pragma",
   );
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   response.setHeader("Access-Control-Max-Age", "86400");
@@ -371,7 +428,10 @@ const server = http.createServer(async (request, response) => {
         }
 
         await assertUserQuotaAvailable(auth.user.id, membership, "image", Number(body?.n || 1));
-        const result = await generateImageContent(body ?? {});
+        const result = await generateImageContent({
+          ...(body ?? {}),
+          watermark: membership?.isActive ? body?.watermark : true,
+        });
         const quota = await consumeUserQuota(auth.user.id, membership, "image", Number(body?.n || 1));
         sendJson(response, 200, { ...result, quota });
       } catch (error) {
@@ -725,7 +785,10 @@ const server = http.createServer(async (request, response) => {
         const membership = await getMembershipSummary(auth.user.id);
         const quota = await getUserQuotaSummary(auth.user.id, membership);
         sendJson(response, 200, {
-          user: auth.user,
+          user: {
+            ...auth.user,
+            membershipContactWechat: await getMembershipContactWechatForUser(auth.user.id),
+          },
           membership,
           quota,
           session: auth.session,
@@ -1075,6 +1138,7 @@ const server = http.createServer(async (request, response) => {
           sendJson(response, 200, {
             role: "agent",
             inviteCode: agent.inviteCode,
+            contactWechat: agent.contactWechat ?? "",
             stats: {
               userCount,
               orderCount,
@@ -1103,6 +1167,30 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (method === "PATCH" && pathname === "/api/v1/admin/overview") {
+      try {
+        const auth = await requireAdminAccount(getAuthToken(request));
+        if (auth.admin.role !== "agent") {
+          sendJson(response, 403, { error: "FORBIDDEN" });
+          return;
+        }
+
+        const agent = await getAgentByUserId(auth.admin.id);
+        if (!agent) {
+          sendJson(response, 403, { error: "AGENT_RECORD_NOT_FOUND" });
+          return;
+        }
+
+        const body = await readJsonBody(request);
+        const updated = await updateAgent(agent.id, { contactWechat: body?.contactWechat });
+        sendJson(response, 200, { contactWechat: updated.contactWechat ?? "" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "UPDATE_AGENT_PROFILE_FAILED";
+        sendJson(response, message === "UNAUTHORIZED" ? 401 : 400, { error: message });
+      }
+      return;
+    }
+
     // ===== Admin Agent Management =====
     if (method === "GET" && pathname === "/api/v1/admin/agents") {
       try {
@@ -1125,7 +1213,8 @@ const server = http.createServer(async (request, response) => {
         const agent = await createAgent({ 
           name: body.name, 
           email: body.email, 
-          password: body.password 
+          password: body.password,
+          contactWechat: body.contactWechat,
         });
         sendJson(response, 200, agent);
       } catch (error) {
@@ -1159,7 +1248,10 @@ const server = http.createServer(async (request, response) => {
             name: body.name,
             priceCents: body.priceCents,
             isActive: body.isActive,
-            textDailyLimit: body.textDailyLimit,
+            textDailyLimit:
+              body.textMonthlyLimit !== undefined
+                ? Math.max(0, Math.round(Number(body.textMonthlyLimit || 0) / 30))
+                : body.textDailyLimit,
             imageMonthlyLimit: body.imageMonthlyLimit,
             wechatAccountLimit: body.wechatAccountLimit,
             tagline: body.tagline,
@@ -1179,7 +1271,11 @@ const server = http.createServer(async (request, response) => {
         await requireSuperAdmin(getAuthToken(request));
         const agentId = pathname.split("/").pop();
         const body = await readJsonBody(request);
-        const agent = await updateAgent(agentId, { name: body?.name, status: body?.status });
+        const agent = await updateAgent(agentId, {
+          name: body?.name,
+          status: body?.status,
+          contactWechat: body?.contactWechat,
+        });
         sendJson(response, 200, agent);
       } catch (error) {
         const message = error instanceof Error ? error.message : "UPDATE_AGENT_FAILED";
@@ -1244,5 +1340,26 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(PORT, () => {
+  const localIps = getLocalIpv4Addresses();
   console.log(`node-backend listening on http://localhost:${PORT}`);
+  if (localIps.length) {
+    console.log(`[node-backend] local IPv4: ${localIps.join(", ")}`);
+    for (const ip of localIps) {
+      console.log(`[node-backend] LAN URL: http://${ip}:${PORT}`);
+    }
+  } else {
+    console.log("[node-backend] local IPv4: not detected");
+  }
+
+  void getPublicIpAddress()
+    .then((publicIp) => {
+      if (publicIp) {
+        console.log(`[node-backend] public egress IP: ${publicIp}`);
+      } else {
+        console.log("[node-backend] public egress IP: unavailable");
+      }
+    })
+    .catch(() => {
+      console.log("[node-backend] public egress IP: unavailable");
+    });
 });

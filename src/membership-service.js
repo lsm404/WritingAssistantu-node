@@ -10,8 +10,24 @@ function formatPrice(priceCents) {
   return (priceCents / 100).toFixed(2);
 }
 
+function resolvePaidTextMonthlyLimit(textDailyLimit) {
+  return Math.max(Number(textDailyLimit || 0), 0) * 30;
+}
+
+function normalizePlanFeatures(features, textMonthlyLimit) {
+  const normalized = features.map((feature) =>
+    String(feature).replace(/每天\s*\d+\s*次文字创作/g, `每月 ${textMonthlyLimit} 次文章生成额度`),
+  );
+  if (!normalized.some((feature) => feature.includes("去水印"))) {
+    normalized.push("会员生图支持去水印");
+  }
+  return normalized;
+}
+
 function sanitizePlan(plan) {
   if (!plan) return null;
+  const textMonthlyLimit = resolvePaidTextMonthlyLimit(plan.textDailyLimit);
+  const features = plan.featuresJson ? JSON.parse(plan.featuresJson) : [];
   return {
     id: plan.id,
     code: plan.code,
@@ -24,10 +40,11 @@ function sanitizePlan(plan) {
     isActive: plan.isActive,
     sortOrder: plan.sortOrder,
     textDailyLimit: plan.textDailyLimit,
+    textMonthlyLimit,
     imageMonthlyLimit: plan.imageMonthlyLimit,
     wechatAccountLimit: plan.wechatAccountLimit,
     tagline: plan.tagline,
-    features: plan.featuresJson ? JSON.parse(plan.featuresJson) : [],
+    features: normalizePlanFeatures(features, textMonthlyLimit),
   };
 }
 
@@ -148,9 +165,9 @@ export async function adminRevokeMembership(userId) {
   return { revoked: result.count };
 }
 
-export async function listPlans() {
+export async function listPlans(includeInactive = false) {
   const rows = await prisma.plan.findMany({
-    where: { isActive: true },
+    where: includeInactive ? undefined : { isActive: true },
     orderBy: [{ sortOrder: "asc" }, { priceCents: "asc" }],
   });
   return rows.map((row) => sanitizePlan(row));

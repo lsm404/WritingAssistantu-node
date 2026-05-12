@@ -23,7 +23,7 @@ const DEFAULT_PLANS = [
     code: "monthly_99",
     name: "基础月卡",
     billingType: "monthly",
-    priceCents: 990,
+    priceCents: 5990,
     durationDays: 30,
     isLifetime: false,
     isActive: true,
@@ -53,7 +53,7 @@ const DEFAULT_PLANS = [
     code: "monthly_399",
     name: "进阶月卡",
     billingType: "monthly",
-    priceCents: 3990,
+    priceCents: 8990,
     durationDays: 30,
     isLifetime: false,
     isActive: true,
@@ -62,14 +62,14 @@ const DEFAULT_PLANS = [
     imageMonthlyLimit: 30,
     wechatAccountLimit: 5,
     tagline: "覆盖稳定更新频率，适合日常持续输出",
-    featuresJson: JSON.stringify(["每天 7 次文字创作", "每月 30 张图片额度", "允许绑定 5 个公众号"]),
+    featuresJson: JSON.stringify(["每天 7 次文字创作", "每月 30 张图片额度", "会员生图支持去水印", "允许绑定 5 个公众号"]),
   },
   {
     id: "plan-monthly-599",
     code: "monthly_599",
     name: "专业月卡",
     billingType: "monthly",
-    priceCents: 5990,
+    priceCents: 10990,
     durationDays: 30,
     isLifetime: false,
     isActive: true,
@@ -78,14 +78,14 @@ const DEFAULT_PLANS = [
     imageMonthlyLimit: 60,
     wechatAccountLimit: 10,
     tagline: "中高频创作更从容，效率和成本更平衡",
-    featuresJson: JSON.stringify(["每天 15 次文字创作", "每月 60 张图片额度", "允许绑定 10 个公众号"]),
+    featuresJson: JSON.stringify(["每天 15 次文字创作", "每月 60 张图片额度", "会员生图支持去水印", "允许绑定 10 个公众号"]),
   },
   {
     id: "plan-monthly-990",
     code: "monthly_990",
     name: "尊享月卡",
     billingType: "monthly",
-    priceCents: 9900,
+    priceCents: 19900,
     durationDays: 30,
     isLifetime: false,
     isActive: true,
@@ -94,7 +94,7 @@ const DEFAULT_PLANS = [
     imageMonthlyLimit: 150,
     wechatAccountLimit: 9999,
     tagline: "高频深度使用场景，给重度创作留足空间",
-    featuresJson: JSON.stringify(["每天 50 次文字创作", "每月 150 张图片额度", "不限制公众号绑定数量"]),
+    featuresJson: JSON.stringify(["每天 50 次文字创作", "每月 150 张图片额度", "会员生图支持去水印", "不限制公众号绑定数量"]),
   },
 ];
 
@@ -135,10 +135,14 @@ export async function ensureDatabaseSetup() {
       id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
       name TEXT NOT NULL,
       invite_code TEXT NOT NULL,
+      contact_wechat TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS contact_wechat TEXT
   `);
   await prisma.$executeRawUnsafe(`
     CREATE UNIQUE INDEX IF NOT EXISTS agents_invite_code_key ON agents(invite_code)
@@ -192,20 +196,7 @@ export async function ensureDatabaseSetup() {
     DEFAULT_PLANS.map((plan) =>
       prisma.plan.upsert({
         where: { code: plan.code },
-        update: {
-          name: plan.name,
-          billingType: plan.billingType,
-          priceCents: plan.priceCents,
-          durationDays: plan.durationDays,
-          isLifetime: plan.isLifetime,
-          isActive: plan.isActive,
-          sortOrder: plan.sortOrder,
-          textDailyLimit: plan.textDailyLimit,
-          imageMonthlyLimit: plan.imageMonthlyLimit,
-          wechatAccountLimit: plan.wechatAccountLimit,
-          featuresJson: plan.featuresJson,
-          tagline: plan.tagline,
-        },
+        update: {},
         create: {
           id: plan.id,
           code: plan.code,
