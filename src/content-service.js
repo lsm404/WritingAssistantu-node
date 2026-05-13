@@ -3,6 +3,37 @@ import { getImageGenerationSettings, getTextGenerationSettings } from "./system-
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
+const CLAUDE_MODEL_IDENTITY_INSTRUCTION = "你是 Claude 模型。";
+const LEGACY_GENERIC_PROMPT_MARKERS = [
+  "写出一篇真正像人类公众号作者深夜亲自写出来的内容",
+  "## 3. 增加“作者存在感”",
+  "你是一个真实公众号作者",
+];
+const NORMALIZED_GENERIC_SYSTEM_PROMPT = `# Role
+
+你是一名成熟的微信公众号内容编辑，擅长把一个主题写成清楚、有信息量、有观点、适合直接发布的公众号文章。
+
+# 最高优先级规则
+
+默认不要写成第一人称故事。除非用户明确要求“以我的经历写”“写成自述”“情感文”“故事文”，否则不要用“我”作为全文主叙事视角，不要虚构“我朋友”“我妈”“我同事”“我室友”等连续私人经历，也不要写成个人崩溃、被安慰、突然释怀的情绪链条。
+
+文章的可信度来自具体观察、逻辑判断、案例和信息密度，不靠卖惨、煽情或密集个人经历。
+
+# 内容目标
+
+默认优先写成观点型、分析型、实用型公众号文章。文章要有明确观点、具体信息、现实场景或案例，并且案例必须服务观点。
+
+如果主题偏情感，也要保持克制：情绪只作为切入口，主体仍然要落到观察、分析、关系处理、行动建议或认知变化上。
+
+# 语言与结构
+
+语言清楚、自然、口语化一点，但不要散乱。可以有一点态度，但不要情绪泛滥。需要分节时，用 \`##\` 或 \`###\` 做有信息量的小标题，不要写“引言”“正文”“总结”。
+
+避免过度煽情、大段心理独白、连续私人故事、苦难叙事、鸡汤式安慰、夸张反转，以及“突然就懂了”“眼泪在眼眶里打转”“那一刻我才明白”等情绪套路。
+
+# 输出要求
+
+只输出最终 Markdown 成稿，不要解释写作思路，不要给多个版本，不要输出任何正文之外的内容。`;
 
 
 const tokenCache = {
@@ -43,6 +74,20 @@ function logOutgoingAiCall(kind, details) {
   const tag = `[node-backend][AI ${kind}]`;
   console.log(`${tag} ${new Date().toISOString()}`);
   console.log(JSON.stringify(details, null, 2));
+}
+
+function normalizeSystemPromptForGeneration(systemPrompt) {
+  let text = String(systemPrompt || "").trim();
+  if (LEGACY_GENERIC_PROMPT_MARKERS.every((marker) => text.includes(marker))) {
+    text = NORMALIZED_GENERIC_SYSTEM_PROMPT;
+  }
+  if (!text) {
+    return CLAUDE_MODEL_IDENTITY_INSTRUCTION;
+  }
+  if (text.startsWith(CLAUDE_MODEL_IDENTITY_INSTRUCTION)) {
+    return text;
+  }
+  return `${CLAUDE_MODEL_IDENTITY_INSTRUCTION}\n\n${text}`;
 }
 
 async function getGenerationConfig(payload, userId = null) {
@@ -129,7 +174,7 @@ function getWechatConfig(payload) {
 
 
 function buildArkRequestBody(payload, config) {
-  const systemText = payload.system_prompt || "";
+  const systemText = normalizeSystemPromptForGeneration(payload.system_prompt || "");
   const userText = payload.user_prompt || "";
 
   // Ark Responses API: instructions = system role, input = user message

@@ -91,6 +91,7 @@ model Plan {
   isActive     Boolean      @default(true) @map("is_active")
   sortOrder    Int          @default(0) @map("sort_order")
   textDailyLimit Int        @default(0) @map("text_daily_limit")
+  textMonthlyLimit Int?     @map("text_monthly_limit")
   imageMonthlyLimit Int     @default(0) @map("image_monthly_limit")
   wechatAccountLimit Int    @default(0) @map("wechat_account_limit")
   featuresJson  String?     @map("features_json")

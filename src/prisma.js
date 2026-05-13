@@ -17,89 +17,6 @@ if (process.env.NODE_ENV !== "production") {
   globalForPrisma.__openClawPrisma = prisma;
 }
 
-const DEFAULT_PLANS = [
-  {
-    id: "plan-monthly-99",
-    code: "monthly_99",
-    name: "基础月卡",
-    billingType: "monthly",
-    priceCents: 5990,
-    durationDays: 30,
-    isLifetime: false,
-    isActive: true,
-    sortOrder: 0,
-    textDailyLimit: 5,
-    imageMonthlyLimit: 0,
-    wechatAccountLimit: 2,
-    tagline: "轻量起步，适合基础文字创作",
-    featuresJson: JSON.stringify(["每天 5 次文字创作", "允许绑定 2 个公众号", "不支持 AI 生图功能"]),
-  },
-  {
-    id: "plan-monthly-199",
-    code: "monthly_199",
-    name: "基础月卡(旧)",
-    billingType: "monthly",
-    priceCents: 1990,
-    durationDays: 30,
-    isLifetime: false,
-    isActive: false,
-    sortOrder: 1,
-    textDailyLimit: 5,
-    imageMonthlyLimit: 15,
-    wechatAccountLimit: 2,
-  },
-  {
-    id: "plan-monthly-399",
-    code: "monthly_399",
-    name: "进阶月卡",
-    billingType: "monthly",
-    priceCents: 8990,
-    durationDays: 30,
-    isLifetime: false,
-    isActive: true,
-    sortOrder: 2,
-    textDailyLimit: 7,
-    imageMonthlyLimit: 30,
-    wechatAccountLimit: 5,
-    tagline: "覆盖稳定更新频率，适合日常持续输出",
-    featuresJson: JSON.stringify(["每天 7 次文字创作", "每月 30 张图片额度", "会员生图支持去水印", "允许绑定 5 个公众号"]),
-  },
-  {
-    id: "plan-monthly-599",
-    code: "monthly_599",
-    name: "专业月卡",
-    billingType: "monthly",
-    priceCents: 10990,
-    durationDays: 30,
-    isLifetime: false,
-    isActive: true,
-    sortOrder: 3,
-    textDailyLimit: 15,
-    imageMonthlyLimit: 60,
-    wechatAccountLimit: 10,
-    tagline: "中高频创作更从容，效率和成本更平衡",
-    featuresJson: JSON.stringify(["每天 15 次文字创作", "每月 60 张图片额度", "会员生图支持去水印", "允许绑定 10 个公众号"]),
-  },
-  {
-    id: "plan-monthly-990",
-    code: "monthly_990",
-    name: "尊享月卡",
-    billingType: "monthly",
-    priceCents: 19900,
-    durationDays: 30,
-    isLifetime: false,
-    isActive: true,
-    sortOrder: 4,
-    textDailyLimit: 50,
-    imageMonthlyLimit: 150,
-    wechatAccountLimit: 9999,
-    tagline: "高频深度使用场景，给重度创作留足空间",
-    featuresJson: JSON.stringify(["每天 50 次文字创作", "每月 150 张图片额度", "会员生图支持去水印", "不限制公众号绑定数量"]),
-  },
-];
-
-const LEGACY_PLAN_CODES = ["trial", "lifetime_499"];
-
 export async function ensureDatabaseSetup() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS system_settings (
@@ -122,14 +39,13 @@ export async function ensureDatabaseSetup() {
     )
   `);
 
-  await prisma.$executeRawUnsafe(
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_ip TEXT`,
-  );
-  await prisma.$executeRawUnsafe(
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_subnet TEXT`,
-  );
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_ip TEXT
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_subnet TEXT
+  `);
 
-  // 代理人 / 邀请渠道（与 prisma/schema.prisma 一致）。线上若未跑 db push，此处仍可避免 agents 表缺失导致启动失败。
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -190,37 +106,16 @@ export async function ensureDatabaseSetup() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS active_wechat_client_key TEXT
   `);
 
-
-
-  await Promise.all(
-    DEFAULT_PLANS.map((plan) =>
-      prisma.plan.upsert({
-        where: { code: plan.code },
-        update: {},
-        create: {
-          id: plan.id,
-          code: plan.code,
-          name: plan.name,
-          billingType: plan.billingType,
-          priceCents: plan.priceCents,
-          durationDays: plan.durationDays,
-          isLifetime: plan.isLifetime,
-          isActive: plan.isActive,
-          sortOrder: plan.sortOrder,
-          textDailyLimit: plan.textDailyLimit,
-          imageMonthlyLimit: plan.imageMonthlyLimit,
-          wechatAccountLimit: plan.wechatAccountLimit,
-          featuresJson: plan.featuresJson,
-          tagline: plan.tagline,
-        },
-      }),
-    ),
-  );
-
-  await prisma.plan.updateMany({
-    where: { code: { in: LEGACY_PLAN_CODES } },
-    data: { isActive: false },
-  });
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE plans ADD COLUMN IF NOT EXISTS text_monthly_limit INT
+  `);
+  await prisma.$executeRawUnsafe(`
+    UPDATE plans
+    SET text_monthly_limit = CASE
+      WHEN text_monthly_limit IS NULL THEN GREATEST(text_daily_limit, 0) * 30
+      ELSE text_monthly_limit
+    END
+  `);
 }
 
 export function getDatabaseUrl() {

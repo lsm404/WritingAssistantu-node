@@ -8,8 +8,12 @@ const FREE_EXPERIENCE_LIMITS = {
 
 // PLAN_LIMITS are now fetched from database via membership.plan
 
-function resolvePaidTextMonthlyLimit(textDailyLimit) {
-  return Math.max(Number(textDailyLimit || 0), 0) * 30;
+function resolvePaidTextMonthlyLimit(plan) {
+  if (!plan) return 0;
+  if (plan.textMonthlyLimit !== null && plan.textMonthlyLimit !== undefined) {
+    return Math.max(Number(plan.textMonthlyLimit || 0), 0);
+  }
+  return Math.max(Number(plan.textDailyLimit || 0), 0) * 30;
 }
 
 function getTodayKey(date = new Date()) {
@@ -24,7 +28,7 @@ function resolveQuotaLimits(membership) {
   if (membership?.isActive && membership.plan) {
     return {
       source: membership.plan.code,
-      textMonthly: resolvePaidTextMonthlyLimit(membership.plan.textDailyLimit),
+      textMonthly: resolvePaidTextMonthlyLimit(membership.plan),
       imageMonthly: membership.plan.imageMonthlyLimit ?? 0,
     };
   }
@@ -211,6 +215,35 @@ export async function ensureUserQuota(userId) {
       ON CONFLICT (user_id) DO NOTHING
     `,
     userId,
+  );
+}
+
+export async function resetPaidUserQuota(userId, tx = prisma) {
+  const monthKey = getMonthKey(new Date());
+
+  await tx.$executeRawUnsafe(
+    `
+      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, created_at, updated_at)
+      VALUES ($1, 0, $2, 0, $2, NOW(), NOW())
+      ON CONFLICT (user_id) DO NOTHING
+    `,
+    userId,
+    monthKey,
+  );
+
+  await tx.$executeRawUnsafe(
+    `
+      UPDATE user_quotas
+      SET
+        text_used = 0,
+        text_date = $2,
+        image_used = 0,
+        image_month = $2,
+        updated_at = NOW()
+      WHERE user_id = $1
+    `,
+    userId,
+    monthKey,
   );
 }
 

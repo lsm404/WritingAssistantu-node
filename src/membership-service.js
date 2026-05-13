@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { resetPaidUserQuota } from "./quota-service.js";
 
 function addDays(baseIso, days) {
   const date = new Date(baseIso);
@@ -10,24 +11,27 @@ function formatPrice(priceCents) {
   return (priceCents / 100).toFixed(2);
 }
 
-function resolvePaidTextMonthlyLimit(textDailyLimit) {
-  return Math.max(Number(textDailyLimit || 0), 0) * 30;
-}
-
-function normalizePlanFeatures(features, textMonthlyLimit) {
-  const normalized = features.map((feature) =>
-    String(feature).replace(/每天\s*\d+\s*次文字创作/g, `每月 ${textMonthlyLimit} 次文章生成额度`),
-  );
-  if (!normalized.some((feature) => feature.includes("去水印"))) {
-    normalized.push("会员生图支持去水印");
+function resolvePaidTextMonthlyLimit(plan) {
+  if (!plan) return 0;
+  if (plan.textMonthlyLimit !== null && plan.textMonthlyLimit !== undefined) {
+    return Math.max(Number(plan.textMonthlyLimit || 0), 0);
   }
-  return normalized;
+  return Math.max(Number(plan.textDailyLimit || 0), 0) * 30;
 }
 
-function sanitizePlan(plan) {
+function parsePlanFeatures(plan) {
+  if (!plan?.featuresJson) return [];
+  try {
+    return JSON.parse(plan.featuresJson);
+  } catch {
+    return [];
+  }
+}
+
+function sanitizePlan(plan, options = {}) {
   if (!plan) return null;
-  const textMonthlyLimit = resolvePaidTextMonthlyLimit(plan.textDailyLimit);
-  const features = plan.featuresJson ? JSON.parse(plan.featuresJson) : [];
+  const textMonthlyLimit = resolvePaidTextMonthlyLimit(plan);
+  const features = parsePlanFeatures(plan);
   return {
     id: plan.id,
     code: plan.code,
@@ -44,7 +48,7 @@ function sanitizePlan(plan) {
     imageMonthlyLimit: plan.imageMonthlyLimit,
     wechatAccountLimit: plan.wechatAccountLimit,
     tagline: plan.tagline,
-    features: normalizePlanFeatures(features, textMonthlyLimit),
+    features,
   };
 }
 
@@ -71,11 +75,11 @@ function resolveQuotaLimits(membership) {
   if (membership?.isActive && membership.plan) {
     return {
       source: membership.plan.code,
-      textDaily: membership.plan.textDailyLimit ?? 0,
+      textMonthly: resolvePaidTextMonthlyLimit(membership.plan),
       imageMonthly: membership.plan.imageMonthlyLimit ?? 0,
     };
   }
-  return { source: "free", textDaily: 0, imageMonthly: 0 };
+  return { source: "free", textMonthly: 0, imageMonthly: 0 };
 }
 
 async function getLatestMembershipRow(userId) {
@@ -154,6 +158,8 @@ export async function adminGrantMembership(userId, planCode) {
     include: { plan: true },
   });
 
+  await resetPaidUserQuota(userId);
+
   return sanitizeMembership(membership);
 }
 
@@ -222,24 +228,29 @@ export async function purchasePlan(userId, planCode) {
           source: "checkout",
         },
       });
+      await resetPaidUserQuota(userId, tx);
       return;
     }
 
     const durationDays = Number(plan.durationDays || 30);
     if (activeMembership && !activeMembership.plan.isLifetime) {
-      const baseTime =
-        activeMembership.endAt && activeMembership.endAt.getTime() > Date.now()
-          ? activeMembership.endAt.toISOString()
-          : stamp;
-      const nextEndAt = addDays(baseTime, durationDays);
+      await tx.membership.updateMany({
+        where: { userId, status: "active" },
+        data: { status: "replaced", updatedAt: new Date(stamp) },
+      });
 
-      await tx.membership.update({
-        where: { id: activeMembership.id },
+      const endAt = addDays(stamp, durationDays);
+      await tx.membership.create({
         data: {
-          endAt: new Date(nextEndAt),
-          updatedAt: new Date(stamp),
+          userId,
+          planId: plan.id,
+          status: "active",
+          startAt: new Date(stamp),
+          endAt: new Date(endAt),
+          source: "checkout",
         },
       });
+      await resetPaidUserQuota(userId, tx);
       return;
     }
 
@@ -254,6 +265,7 @@ export async function purchasePlan(userId, planCode) {
         source: "checkout",
       },
     });
+    await resetPaidUserQuota(userId, tx);
   });
 
   return {

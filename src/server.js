@@ -147,17 +147,21 @@ function buildFilename(format, scope) {
 
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
-    let raw = "";
+    const chunks = [];
+    let size = 0;
 
     request.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > 1024 * 1024) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      chunks.push(buffer);
+      size += buffer.length;
+      if (size > 1024 * 1024) {
         reject(new Error("BODY_TOO_LARGE"));
         request.destroy();
       }
     });
 
     request.on("end", () => {
+      const raw = Buffer.concat(chunks, size).toString("utf8");
       if (!raw) {
         resolve(null);
         return;
@@ -422,7 +426,7 @@ const server = http.createServer(async (request, response) => {
         const auth = await requireUser(getAuthToken(request));
         const membership = await getMembershipSummary(auth.user.id);
 
-        if (membership?.plan?.code === "monthly_99") {
+        if (membership?.isActive && Number(membership?.plan?.imageMonthlyLimit ?? 0) <= 0) {
           sendJson(response, 403, { error: "IMAGE_GENERATION_NOT_ALLOWED_FOR_BASIC_PLAN" });
           return;
         }
@@ -1252,6 +1256,10 @@ const server = http.createServer(async (request, response) => {
               body.textMonthlyLimit !== undefined
                 ? Math.max(0, Math.round(Number(body.textMonthlyLimit || 0) / 30))
                 : body.textDailyLimit,
+            textMonthlyLimit:
+              body.textMonthlyLimit !== undefined
+                ? Math.max(0, Math.round(Number(body.textMonthlyLimit || 0)))
+                : undefined,
             imageMonthlyLimit: body.imageMonthlyLimit,
             wechatAccountLimit: body.wechatAccountLimit,
             tagline: body.tagline,
