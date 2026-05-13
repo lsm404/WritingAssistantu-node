@@ -34,6 +34,45 @@ const NORMALIZED_GENERIC_SYSTEM_PROMPT = `# Role
 # 输出要求
 
 只输出最终 Markdown 成稿，不要解释写作思路，不要给多个版本，不要输出任何正文之外的内容。`;
+const DE_AI_TONE_INSTRUCTION =
+  "我希望文本略有点生涩和稚嫩，用那种中文并不是很精通的人的语气撰写这个文本，稍微学术一点，态度端正一点，更多体现在语言上的大白话";
+const AI_RULE_INSTRUCTIONS_MAX_CHARS = 5000;
+const AI_RULE_TRUNCATION_MARKER = "…[已按平台规则截断]";
+const REWRITE_GOAL_LABELS = {
+  new_article: "重写为新文章",
+  new_angle: "换个切入角度",
+  more_conversational: "更口语化",
+  more_actionable: "更可执行",
+};
+const REFERENCE_FOCUS_LABELS = {
+  mixed: "综合参考",
+  structure: "重点参考结构",
+  tone: "重点参考语气",
+  opening: "重点参考开头",
+};
+const REFERENCE_LEVEL_LABELS = {
+  low: "轻参考",
+  medium: "中参考",
+  high: "强参考",
+};
+const EXPRESSION_REQUIREMENTS = {
+  standard: "通俗易懂，大白话，不装文化人。",
+  conversational: "就像咱们现在面对面聊天一样，极度口语化，多用短促的句子。",
+  de_ai: "彻底抛弃AI腔调，要有血有肉有情绪，多写具体的真实生活场景。",
+  opinionated: "情绪极度饱满，爱憎分明，该激动就激动，带入强烈的个人主观色彩。",
+};
+const LENGTH_DESCRIPTIONS = {
+  short: "偏短，约 500-800 字。",
+  medium: "中等长度，约 800-1500 字。",
+  long: "偏长，约 1500 字以上。",
+};
+const MODE_DESCRIPTIONS = {
+  standard: "标准公众号干货文章。",
+  story: "故事化表达，增强代入感。",
+  case_study: "案例拆解风格，强调具体案例。",
+  listicle: "清单型内容，条理清晰。",
+  analysis: "分析型文章，强调背景、问题和判断。",
+};
 
 
 const tokenCache = {
@@ -76,18 +115,118 @@ function logOutgoingAiCall(kind, details) {
   console.log(JSON.stringify(details, null, 2));
 }
 
-function normalizeSystemPromptForGeneration(systemPrompt) {
-  let text = String(systemPrompt || "").trim();
+function clampAiInstructionString(text, maxChars) {
+  if (maxChars <= 0) {
+    return "";
+  }
+  const value = String(text || "").trim();
+  if (value.length <= maxChars) {
+    return value;
+  }
+  if (maxChars <= AI_RULE_TRUNCATION_MARKER.length) {
+    return value.slice(0, maxChars);
+  }
+  return value.slice(0, maxChars - AI_RULE_TRUNCATION_MARKER.length) + AI_RULE_TRUNCATION_MARKER;
+}
+
+function enforceTwoPartAiRules(partA, partB, maxChars) {
+  if (partA.length + partB.length <= maxChars) {
+    return [partA, partB];
+  }
+  if (partB.length >= maxChars) {
+    return ["", clampAiInstructionString(partB, maxChars)];
+  }
+  return [clampAiInstructionString(partA, maxChars - partB.length), partB];
+}
+
+function buildSystemPrompt(payload) {
+  let text = String(payload.system_prompt || "").trim();
   if (LEGACY_GENERIC_PROMPT_MARKERS.every((marker) => text.includes(marker))) {
     text = NORMALIZED_GENERIC_SYSTEM_PROMPT;
   }
   if (!text) {
-    return CLAUDE_MODEL_IDENTITY_INSTRUCTION;
+    text = NORMALIZED_GENERIC_SYSTEM_PROMPT;
   }
-  if (text.startsWith(CLAUDE_MODEL_IDENTITY_INSTRUCTION)) {
-    return text;
+  if (!text.startsWith(CLAUDE_MODEL_IDENTITY_INSTRUCTION)) {
+    text = `${CLAUDE_MODEL_IDENTITY_INSTRUCTION}\n\n${text}`;
   }
-  return `${CLAUDE_MODEL_IDENTITY_INSTRUCTION}\n\n${text}`;
+  const alreadyHasDeAiTone = text.includes(DE_AI_TONE_INSTRUCTION);
+  const [systemBlock, deAiBlock] = enforceTwoPartAiRules(
+    text,
+    alreadyHasDeAiTone ? "" : DE_AI_TONE_INSTRUCTION,
+    AI_RULE_INSTRUCTIONS_MAX_CHARS,
+  );
+  return [systemBlock, deAiBlock].filter(Boolean).join("\n\n");
+}
+
+function buildLengthDescription(length) {
+  return LENGTH_DESCRIPTIONS[length] || LENGTH_DESCRIPTIONS.medium;
+}
+
+function buildModeDescription(mode) {
+  return MODE_DESCRIPTIONS[mode] || MODE_DESCRIPTIONS.standard;
+}
+
+function buildExpressionRequirement(expressionMode) {
+  return EXPRESSION_REQUIREMENTS[expressionMode] || EXPRESSION_REQUIREMENTS.standard;
+}
+
+function buildUserPrompt(payload) {
+  const existing = String(payload.user_prompt || "").trim();
+  if (existing) {
+    return existing;
+  }
+
+  const creationMode = payload.creation_mode || "synthesized";
+  const topic = String(payload.topic || "").trim();
+  const sourceArticle = String(payload.source_article || "").trim();
+
+  if (creationMode === "rewrite") {
+    if (!sourceArticle) {
+      throw new Error("SOURCE_ARTICLE_REQUIRED");
+    }
+    return [
+      "请基于下面的参考文章，写一篇新的微信公众号文章。",
+      payload.rewrite_goal ? `改写目标：${REWRITE_GOAL_LABELS[payload.rewrite_goal] || payload.rewrite_goal}` : "",
+      payload.reference_focus
+        ? `参考重点：${REFERENCE_FOCUS_LABELS[payload.reference_focus] || payload.reference_focus}`
+        : "",
+      payload.reference_level
+        ? `参考强度：${REFERENCE_LEVEL_LABELS[payload.reference_level] || payload.reference_level}`
+        : "",
+      `文章长度：${buildLengthDescription(payload.length)}`,
+      payload.mode ? `写作模式：${buildModeDescription(payload.mode)}` : "",
+      topic ? `主题：${topic}` : "",
+      payload.audience ? `目标读者：${payload.audience}` : "",
+      payload.style ? `风格偏好：${payload.style}` : "",
+      payload.expression_mode ? `表达处理：${buildExpressionRequirement(payload.expression_mode)}` : "",
+      "",
+      "参考文章如下：",
+      sourceArticle,
+      "",
+      "请直接输出最终 Markdown 成稿，不要输出分析过程。",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (!topic) {
+    throw new Error("TOPIC_REQUIRED");
+  }
+
+  return [
+    "请根据下面的信息，生成一篇微信公众号文章。",
+    `主题：${topic}`,
+    payload.audience ? `目标读者：${payload.audience}` : "",
+    payload.style ? `风格偏好：${payload.style}` : "",
+    `文章长度：${buildLengthDescription(payload.length)}`,
+    payload.mode ? `写作模式：${buildModeDescription(payload.mode)}` : "",
+    payload.expression_mode ? `表达处理：${buildExpressionRequirement(payload.expression_mode)}` : "",
+    "",
+    "请直接输出最终 Markdown 成稿，不要输出分析过程。",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function getGenerationConfig(payload, userId = null) {
@@ -174,8 +313,8 @@ function getWechatConfig(payload) {
 
 
 function buildArkRequestBody(payload, config) {
-  const systemText = normalizeSystemPromptForGeneration(payload.system_prompt || "");
-  const userText = payload.user_prompt || "";
+  const systemText = buildSystemPrompt(payload);
+  const userText = buildUserPrompt(payload);
 
   // Ark Responses API: instructions = system role, input = user message
   const jsonPayload = {
@@ -222,10 +361,6 @@ function extractArticleMarkdown(data) {
 }
 
 export async function generateArticleContent(payload, userId = null) {
-  if (!payload.user_prompt?.trim()) {
-    throw new Error("USER_PROMPT_REQUIRED");
-  }
-
   const config = await getGenerationConfig(payload, userId);
   const requestUrl = `${config.baseUrl.replace(/\/$/, "")}/responses`;
   const requestBody = buildArkRequestBody(payload, config);
