@@ -77,6 +77,7 @@ const MIME_TYPES = {
   ".woff2":"font/woff2",
   ".zip":  "application/zip",
   ".msi":  "application/x-msi",
+  ".exe":  "application/vnd.microsoft.portable-executable",
 };
 
 function serveStatic(response, filePath) {
@@ -149,18 +150,25 @@ function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let rejected = false;
 
     request.on("data", (chunk) => {
+      if (rejected) {
+        return;
+      }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       chunks.push(buffer);
       size += buffer.length;
       if (size > 1024 * 1024) {
+        rejected = true;
         reject(new Error("BODY_TOO_LARGE"));
-        request.destroy();
       }
     });
 
     request.on("end", () => {
+      if (rejected) {
+        return;
+      }
       const raw = Buffer.concat(chunks, size).toString("utf8");
       if (!raw) {
         resolve(null);
@@ -314,6 +322,10 @@ const server = http.createServer(async (request, response) => {
           sendJson(response, 400, { error: "INVALID_JSON" });
           return;
         }
+        if (error instanceof Error && error.message === "BODY_TOO_LARGE") {
+          sendJson(response, 413, { error: "BODY_TOO_LARGE" });
+          return;
+        }
         throw error;
       }
 
@@ -395,6 +407,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 200, { ...result, quota });
       } catch (error) {
         const message = error instanceof Error ? error.message : "ARTICLE_GENERATE_FAILED";
+        console.error("[article/generate] failed:", error);
         const statusCode =
           message === "UNAUTHORIZED"
             ? 401
@@ -1326,7 +1339,10 @@ const server = http.createServer(async (request, response) => {
 
     // Serve public static files — 官网入口 (no auth required)
     if (method === "GET" && !pathname.startsWith("/api")) {
-      const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
+      const relativePath =
+        pathname === "/"
+          ? "index.html"
+          : pathname.replace(/^\//, "");
       const filePath = path.join(PUBLIC_DIR, relativePath);
 
       // 安全校验：确保文件确实在公共目录内
