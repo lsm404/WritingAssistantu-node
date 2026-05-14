@@ -43,51 +43,75 @@ export async function replaceUserWechatAccounts(userId, body) {
   let activeAccountId =
     typeof body.activeAccountId === "string" ? body.activeAccountId.trim() : "";
 
-  await prisma.$transaction(async (tx) => {
-    await tx.wechatAccount.deleteMany({ where: { userId } });
-
-    let sortOrder = 0;
-    for (const raw of accounts) {
-      const clientKey = String(raw?.id ?? "").trim();
-      const name = String(raw?.name ?? "").trim();
-      if (!clientKey || !name) {
-        throw new Error("ACCOUNT_NAME_AND_ID_REQUIRED");
-      }
-
-      const cipher =
-        raw?.appSecretEncrypted !== undefined && raw?.appSecretEncrypted !== null
-          ? String(raw.appSecretEncrypted).trim()
-          : "";
-      const plainLeak =
-        raw?.appSecret !== undefined && raw?.appSecret !== null ? String(raw.appSecret).trim() : "";
-
-      let appSecret = "";
-      if (cipher) {
-        appSecret = decryptWechatAccountAppSecretTransport(cipher);
-      } else if (plainLeak) {
-        throw new Error("APP_SECRET_PLAINTEXT_FORBIDDEN");
-      }
-
-      await tx.wechatAccount.create({
-        data: {
-          userId,
-          clientKey,
-          name,
-          appId: String(raw?.appId ?? "").trim(),
-          appSecret,
-          thumbMediaId: String(raw?.thumbMediaId ?? "").trim(),
-          sortOrder: sortOrder++,
-        },
-      });
+  const normalizedAccounts = accounts.map((raw, index) => {
+    const clientKey = String(raw?.id ?? "").trim();
+    const name = String(raw?.name ?? "").trim();
+    if (!clientKey || !name) {
+      throw new Error("ACCOUNT_NAME_AND_ID_REQUIRED");
     }
 
-    const ids = accounts.map((a) => String(a?.id ?? "").trim()).filter(Boolean);
+    const cipher =
+      raw?.appSecretEncrypted !== undefined && raw?.appSecretEncrypted !== null
+        ? String(raw.appSecretEncrypted).trim()
+        : "";
+    const plainLeak =
+      raw?.appSecret !== undefined && raw?.appSecret !== null ? String(raw.appSecret).trim() : "";
+
+    let appSecret = "";
+    if (cipher) {
+      appSecret = decryptWechatAccountAppSecretTransport(cipher);
+    } else if (plainLeak) {
+      throw new Error("APP_SECRET_PLAINTEXT_FORBIDDEN");
+    }
+
+    return {
+      clientKey,
+      name,
+      appId: String(raw?.appId ?? "").trim(),
+      appSecret,
+      thumbMediaId: String(raw?.thumbMediaId ?? "").trim(),
+      sortOrder: index,
+    };
+  });
+
+  await prisma.$transaction(async (tx) => {
+    const ids = normalizedAccounts.map((account) => account.clientKey);
     if (!ids.length) {
+      await tx.wechatAccount.deleteMany({ where: { userId } });
       await tx.user.update({
         where: { id: userId },
         data: { activeWechatClientKey: null },
       });
       return;
+    }
+
+    await tx.wechatAccount.deleteMany({
+      where: {
+        userId,
+        clientKey: { notIn: ids },
+      },
+    });
+
+    for (const account of normalizedAccounts) {
+      await tx.wechatAccount.upsert({
+        where: {
+          userId_clientKey: {
+            userId,
+            clientKey: account.clientKey,
+          },
+        },
+        create: {
+          userId,
+          ...account,
+        },
+        update: {
+          name: account.name,
+          appId: account.appId,
+          appSecret: account.appSecret,
+          thumbMediaId: account.thumbMediaId,
+          sortOrder: account.sortOrder,
+        },
+      });
     }
 
     if (!activeAccountId || !ids.includes(activeAccountId)) {
