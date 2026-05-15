@@ -62,6 +62,7 @@ import { getUserPrompts, createUserPrompt, updateUserPrompt, deleteUserPrompt } 
 import { getUserWechatAccounts, replaceUserWechatAccounts } from "./wechat-accounts-service.js";
 
 const PORT = Number(process.env.PORT || 3100);
+const WECHAT_COVER_MAX_BYTES = 5 * 1024 * 1024;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 
@@ -473,6 +474,10 @@ const server = http.createServer(async (request, response) => {
         const file = form.get("file");
         if (!(file instanceof File)) {
           sendJson(response, 400, { error: "FILE_REQUIRED" });
+          return;
+        }
+        if (file.size > WECHAT_COVER_MAX_BYTES) {
+          sendJson(response, 413, { error: "WECHAT_THUMB_TOO_LARGE" });
           return;
         }
 
