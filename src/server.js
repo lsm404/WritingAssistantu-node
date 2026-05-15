@@ -32,11 +32,15 @@ import {
 import {
   adminGrantMembership,
   adminRevokeMembership,
+  createPlan,
+  deletePlan,
   getMembershipSummary,
   listAllOrders,
   listPlans,
   listUsersWithMemberships,
+  listUsersWithMembershipsPage,
   purchasePlan,
+  recordArticleGenerationLog,
 } from "./membership-service.js";
 import {
   getImageGenerationSettings,
@@ -402,9 +406,11 @@ const server = http.createServer(async (request, response) => {
       try {
         const auth = await requireUser(getAuthToken(request));
         const membership = await getMembershipSummary(auth.user.id);
-        await assertUserQuotaAvailable(auth.user.id, membership, "text", 1);
+        const quotaKind = body?.regenerate_for_de_ai ? "de_ai" : "text";
+        await assertUserQuotaAvailable(auth.user.id, membership, quotaKind, 1);
         const result = await generateArticleContent(body ?? {}, auth.user.id);
-        const quota = await consumeUserQuota(auth.user.id, membership, "text", 1);
+        const quota = await consumeUserQuota(auth.user.id, membership, quotaKind, 1);
+        await recordArticleGenerationLog(auth.user.id, body ?? {}, result, quotaKind);
         sendJson(response, 200, { ...result, quota });
       } catch (error) {
         const message = error instanceof Error ? error.message : "ARTICLE_GENERATE_FAILED";
@@ -416,7 +422,8 @@ const server = http.createServer(async (request, response) => {
                 message === "SOURCE_ARTICLE_REQUIRED" ||
                 message === "ARK_API_KEY_MISSING" ||
                 message === "ARK_MODEL_MISSING" ||
-                message === "TEXT_QUOTA_EXCEEDED"
+                message === "TEXT_QUOTA_EXCEEDED" ||
+                message === "DE_AI_QUOTA_EXCEEDED"
             ? 400
             : 500;
         sendJson(response, statusCode, { error: message });
@@ -885,9 +892,61 @@ const server = http.createServer(async (request, response) => {
           inviteCode = "";
         }
 
-        sendJson(response, 200, {
-          users: await listUsersWithMemberships({ inviteCode, agentId }),
-        });
+        const page = requestUrl.searchParams.get("page") || "1";
+        const pageSize = requestUrl.searchParams.get("pageSize") || "10";
+        const search = requestUrl.searchParams.get("search") || "";
+        sendJson(
+          response,
+          200,
+          await listUsersWithMembershipsPage({
+            inviteCode,
+            agentId,
+            search,
+            page,
+            pageSize,
+            includeSuperAdminFields: auth.admin.role === "super_admin",
+          }),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "FORBIDDEN";
+        const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/v1/admin/memberships") {
+      try {
+        const auth = await requireAdminAccount(getAuthToken(request));
+        let inviteCode = requestUrl.searchParams.get("inviteCode") || "";
+        let agentId = requestUrl.searchParams.get("agentId") || "";
+
+        if (auth.admin.role === "agent") {
+          const agent = await getAgentByUserId(auth.admin.id);
+          if (!agent) {
+            sendJson(response, 403, { error: "AGENT_RECORD_NOT_FOUND" });
+            return;
+          }
+          agentId = agent.id;
+          inviteCode = "";
+        }
+
+        const page = requestUrl.searchParams.get("page") || "1";
+        const pageSize = requestUrl.searchParams.get("pageSize") || "10";
+        const search = requestUrl.searchParams.get("search") || "";
+        sendJson(
+          response,
+          200,
+          await listUsersWithMembershipsPage({
+            inviteCode,
+            agentId,
+            search,
+            page,
+            pageSize,
+            membershipOnly: true,
+            includeSuperAdminFields: auth.admin.role === "super_admin",
+          }),
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : "FORBIDDEN";
         const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
@@ -1247,6 +1306,25 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (method === "POST" && pathname === "/api/v1/admin/plans") {
+      try {
+        await requireSuperAdmin(getAuthToken(request));
+        const body = await readJsonBody(request);
+        const plan = await createPlan(body ?? {});
+        sendJson(response, 200, { ok: true, plan });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "CREATE_PLAN_FAILED";
+        const statusCode =
+          message === "UNAUTHORIZED"
+            ? 401
+            : message === "PLAN_CODE_REQUIRED" || message === "PLAN_CODE_EXISTS"
+              ? 400
+              : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
     if (method === "PATCH" && pathname.startsWith("/api/v1/admin/plans/")) {
       try {
         await requireSuperAdmin(getAuthToken(request));
@@ -1279,6 +1357,7 @@ const server = http.createServer(async (request, response) => {
                 ? Math.max(0, Math.round(Number(body.textMonthlyLimit || 0)))
                 : undefined,
             imageMonthlyLimit: body.imageMonthlyLimit,
+            deAiMonthlyLimit: body.deAiMonthlyLimit,
             wechatAccountLimit: body.wechatAccountLimit,
             tagline: body.tagline,
             featuresJson: Array.isArray(body.features) ? JSON.stringify(body.features) : undefined,
@@ -1288,6 +1367,25 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 200, { ok: true, plan: updated });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
+    if (method === "DELETE" && pathname.startsWith("/api/v1/admin/plans/")) {
+      try {
+        await requireSuperAdmin(getAuthToken(request));
+        const planId = pathname.split("/").filter(Boolean).pop();
+        const result = await deletePlan(planId);
+        sendJson(response, 200, { ok: true, ...result });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "DELETE_PLAN_FAILED";
+        const statusCode =
+          message === "UNAUTHORIZED"
+            ? 401
+            : message === "PLAN_NOT_FOUND" || message === "PLAN_IN_USE"
+              ? 400
+              : 500;
+        sendJson(response, statusCode, { error: message });
       }
       return;
     }
@@ -1333,7 +1431,7 @@ const server = http.createServer(async (request, response) => {
           return;
         }
 
-        const users = await listUsersWithMemberships({ agentId: agent.id });
+        const users = await listUsersWithMemberships({ agentId: agent.id, includeSuperAdminFields: false });
         sendJson(response, 200, { users });
       } catch (error) {
         const message = error instanceof Error ? error.message : "FETCH_USERS_FAILED";

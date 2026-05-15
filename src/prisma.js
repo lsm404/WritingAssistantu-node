@@ -34,9 +34,17 @@ export async function ensureDatabaseSetup() {
       text_date TEXT NOT NULL DEFAULT '',
       image_used INT NOT NULL DEFAULT 0,
       image_month TEXT NOT NULL DEFAULT '',
+      de_ai_used INT NOT NULL DEFAULT 0,
+      de_ai_period TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE user_quotas ADD COLUMN IF NOT EXISTS de_ai_used INT NOT NULL DEFAULT 0
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE user_quotas ADD COLUMN IF NOT EXISTS de_ai_period TEXT NOT NULL DEFAULT ''
   `);
 
   await prisma.$executeRawUnsafe(`
@@ -110,11 +118,36 @@ export async function ensureDatabaseSetup() {
     ALTER TABLE plans ADD COLUMN IF NOT EXISTS text_monthly_limit INT
   `);
   await prisma.$executeRawUnsafe(`
+    ALTER TABLE plans ADD COLUMN IF NOT EXISTS de_ai_monthly_limit INT NOT NULL DEFAULT 0
+  `);
+  await prisma.$executeRawUnsafe(`
     UPDATE plans
     SET text_monthly_limit = CASE
       WHEN text_monthly_limit IS NULL THEN GREATEST(text_daily_limit, 0) * 30
       ELSE text_monthly_limit
     END
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS article_generation_logs (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'text',
+      client_source TEXT NOT NULL DEFAULT 'unknown',
+      topic TEXT,
+      creation_mode TEXT,
+      model TEXT,
+      article_chars INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS article_generation_logs_user_id_created_at_idx
+      ON article_generation_logs(user_id, created_at)
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS article_generation_logs_kind_idx
+      ON article_generation_logs(kind)
   `);
 }
 

@@ -29,6 +29,7 @@ model User {
   ownedAgent  Agent?       @relation("AgentOwner")
   prompts      Prompt[]
   wechatAccounts           WechatAccount[]
+  articleGenerationLogs    ArticleGenerationLog[]
   activeWechatClientKey    String?       @map("active_wechat_client_key")
   quota                    UserQuota?
 
@@ -93,6 +94,7 @@ model Plan {
   textDailyLimit Int        @default(0) @map("text_daily_limit")
   textMonthlyLimit Int?     @map("text_monthly_limit")
   imageMonthlyLimit Int     @default(0) @map("image_monthly_limit")
+  deAiMonthlyLimit Int      @default(0) @map("de_ai_monthly_limit")
   wechatAccountLimit Int    @default(0) @map("wechat_account_limit")
   featuresJson  String?     @map("features_json")
   tagline       String?
@@ -224,9 +226,28 @@ model UserQuota {
   textDate   String   @default("") @map("text_date")
   imageUsed  Int      @default(0) @map("image_used")
   imageMonth String   @default("") @map("image_month")
+  deAiUsed   Int      @default(0) @map("de_ai_used")
+  deAiPeriod String   @default("") @map("de_ai_period")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_quotas")
+}
+
+model ArticleGenerationLog {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  kind         String   @default("text")
+  clientSource String   @default("unknown") @map("client_source")
+  topic        String?
+  creationMode String?  @map("creation_mode")
+  model        String?
+  articleChars Int      @default(0) @map("article_chars")
+  createdAt    DateTime @default(now()) @map("created_at")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([kind])
+  @@map("article_generation_logs")
 }

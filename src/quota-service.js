@@ -4,6 +4,7 @@ import { getQuotaFreeRollingSettings } from "./system-settings-service.js";
 const FREE_EXPERIENCE_LIMITS = {
   textDaily: 2,
   imageMonthly: 3,
+  deAiMonthly: 1,
 };
 
 // PLAN_LIMITS are now fetched from database via membership.plan
@@ -30,6 +31,7 @@ function resolveQuotaLimits(membership) {
       source: membership.plan.code,
       textMonthly: resolvePaidTextMonthlyLimit(membership.plan),
       imageMonthly: membership.plan.imageMonthlyLimit ?? 0,
+      deAiMonthly: membership.plan.deAiMonthlyLimit ?? 0,
     };
   }
 
@@ -80,6 +82,8 @@ function normalizeQuotaRowWithPolicy(row, now, freePolicy) {
       textDate: monthKey,
       imageUsed: row.imageMonth === monthKey ? row.imageUsed : 0,
       imageMonth: monthKey,
+      deAiUsed: row.deAiPeriod === monthKey ? row.deAiUsed : 0,
+      deAiPeriod: monthKey,
     };
   }
 
@@ -111,6 +115,8 @@ function normalizeQuotaRowWithPolicy(row, now, freePolicy) {
     textDate,
     imageUsed,
     imageMonth,
+    deAiUsed: textDate === (row.deAiPeriod ?? textDate) ? Number(row.deAiUsed || 0) : 0,
+    deAiPeriod: textDate,
   };
 }
 
@@ -190,6 +196,14 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
       quotaRefreshAt: imageQuotaRefreshAt,
       ...imageReset,
     },
+    deAi: {
+      limit: limits.deAiMonthly,
+      used: normalized.deAiUsed,
+      remaining: Math.max(limits.deAiMonthly - normalized.deAiUsed, 0),
+      periodKey: normalized.deAiPeriod,
+      quotaRefreshAt: freePolicy ? textQuotaRefreshAt : firstDayNextMonthUtcStartIso(now),
+      ...textReset,
+    },
   };
 }
 
@@ -201,17 +215,25 @@ export async function ensureQuotaSetup() {
       text_date TEXT NOT NULL DEFAULT '',
       image_used INT NOT NULL DEFAULT 0,
       image_month TEXT NOT NULL DEFAULT '',
+      de_ai_used INT NOT NULL DEFAULT 0,
+      de_ai_period TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE user_quotas ADD COLUMN IF NOT EXISTS de_ai_used INT NOT NULL DEFAULT 0
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE user_quotas ADD COLUMN IF NOT EXISTS de_ai_period TEXT NOT NULL DEFAULT ''
   `);
 }
 
 export async function ensureUserQuota(userId) {
   await prisma.$executeRawUnsafe(
     `
-      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, created_at, updated_at)
-      VALUES ($1, 0, '', 0, '', NOW(), NOW())
+      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, de_ai_used, de_ai_period, created_at, updated_at)
+      VALUES ($1, 0, '', 0, '', 0, '', NOW(), NOW())
       ON CONFLICT (user_id) DO NOTHING
     `,
     userId,
@@ -223,8 +245,8 @@ export async function resetPaidUserQuota(userId, tx = prisma) {
 
   await tx.$executeRawUnsafe(
     `
-      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, created_at, updated_at)
-      VALUES ($1, 0, $2, 0, $2, NOW(), NOW())
+      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, de_ai_used, de_ai_period, created_at, updated_at)
+      VALUES ($1, 0, $2, 0, $2, 0, $2, NOW(), NOW())
       ON CONFLICT (user_id) DO NOTHING
     `,
     userId,
@@ -239,6 +261,8 @@ export async function resetPaidUserQuota(userId, tx = prisma) {
         text_date = $2,
         image_used = 0,
         image_month = $2,
+        de_ai_used = 0,
+        de_ai_period = $2,
         updated_at = NOW()
       WHERE user_id = $1
     `,
@@ -250,8 +274,8 @@ export async function resetPaidUserQuota(userId, tx = prisma) {
 async function getRawUserQuota(tx, userId) {
   await tx.$executeRawUnsafe(
     `
-      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, created_at, updated_at)
-      VALUES ($1, 0, '', 0, '', NOW(), NOW())
+      INSERT INTO user_quotas (user_id, text_used, text_date, image_used, image_month, de_ai_used, de_ai_period, created_at, updated_at)
+      VALUES ($1, 0, '', 0, '', 0, '', NOW(), NOW())
       ON CONFLICT (user_id) DO NOTHING
     `,
     userId,
@@ -264,7 +288,9 @@ async function getRawUserQuota(tx, userId) {
         text_used AS "textUsed",
         text_date AS "textDate",
         image_used AS "imageUsed",
-        image_month AS "imageMonth"
+        image_month AS "imageMonth",
+        de_ai_used AS "deAiUsed",
+        de_ai_period AS "deAiPeriod"
       FROM user_quotas
       WHERE user_id = $1
       LIMIT 1
@@ -284,7 +310,9 @@ export async function getUserQuotaSummary(userId, membership) {
         text_used AS "textUsed",
         text_date AS "textDate",
         image_used AS "imageUsed",
-        image_month AS "imageMonth"
+        image_month AS "imageMonth",
+        de_ai_used AS "deAiUsed",
+        de_ai_period AS "deAiPeriod"
       FROM user_quotas
       WHERE user_id = $1
       LIMIT 1
@@ -299,10 +327,11 @@ export async function getUserQuotaSummary(userId, membership) {
   if (freePolicy) {
     limits.textDaily = freePolicy.textLimit;
     limits.imageMonthly = freePolicy.imageLimit;
+    limits.deAiMonthly = freePolicy.deAiLimit;
   }
 
   const normalized = normalizeQuotaRowWithPolicy(
-    rows[0] ?? { userId, textUsed: 0, textDate: "", imageUsed: 0, imageMonth: "" },
+    rows[0] ?? { userId, textUsed: 0, textDate: "", imageUsed: 0, imageMonth: "", deAiUsed: 0, deAiPeriod: "" },
     new Date(),
     freePolicy,
   );
@@ -320,12 +349,15 @@ export async function assertUserQuotaAvailable(userId, membership, kind, amount 
   if (kind === "image" && summary.image.remaining < amount) {
     throw new Error("IMAGE_QUOTA_EXCEEDED");
   }
+  if (kind === "de_ai" && summary.deAi.remaining < amount) {
+    throw new Error("DE_AI_QUOTA_EXCEEDED");
+  }
 
   return summary;
 }
 
 export async function consumeUserQuota(userId, membership, kind, amount = 1) {
-  if (!["text", "image"].includes(kind)) {
+  if (!["text", "image", "de_ai"].includes(kind)) {
     throw new Error("INVALID_QUOTA_KIND");
   }
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -339,6 +371,7 @@ export async function consumeUserQuota(userId, membership, kind, amount = 1) {
   if (freePolicy) {
     limits.textDaily = freePolicy.textLimit;
     limits.imageMonthly = freePolicy.imageLimit;
+    limits.deAiMonthly = freePolicy.deAiLimit;
   }
 
   return prisma.$transaction(async (tx) => {
@@ -365,7 +398,7 @@ export async function consumeUserQuota(userId, membership, kind, amount = 1) {
         normalized.textUsed + amount,
         normalized.textDate,
       );
-    } else {
+    } else if (kind === "image") {
       const remaining = Math.max(limits.imageMonthly - normalized.imageUsed, 0);
       if (remaining < amount) {
         throw new Error("IMAGE_QUOTA_EXCEEDED");
@@ -384,6 +417,25 @@ export async function consumeUserQuota(userId, membership, kind, amount = 1) {
         normalized.imageUsed + amount,
         normalized.imageMonth,
       );
+    } else {
+      const remaining = Math.max(limits.deAiMonthly - normalized.deAiUsed, 0);
+      if (remaining < amount) {
+        throw new Error("DE_AI_QUOTA_EXCEEDED");
+      }
+
+      await tx.$executeRawUnsafe(
+        `
+          UPDATE user_quotas
+          SET
+            de_ai_used = $2,
+            de_ai_period = $3,
+            updated_at = NOW()
+          WHERE user_id = $1
+        `,
+        userId,
+        normalized.deAiUsed + amount,
+        normalized.deAiPeriod,
+      );
     }
 
     const updatedRows = await tx.$queryRawUnsafe(
@@ -393,7 +445,9 @@ export async function consumeUserQuota(userId, membership, kind, amount = 1) {
           text_used AS "textUsed",
           text_date AS "textDate",
           image_used AS "imageUsed",
-          image_month AS "imageMonth"
+          image_month AS "imageMonth",
+          de_ai_used AS "deAiUsed",
+          de_ai_period AS "deAiPeriod"
         FROM user_quotas
         WHERE user_id = $1
         LIMIT 1

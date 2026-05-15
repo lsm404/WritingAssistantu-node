@@ -29,6 +29,7 @@ export const QUOTA_FREE_ROLLING_KEYS = {
   imagePeriodDays: "quota_free_image_period_days",
   textLimit: "quota_free_text_limit",
   imageLimit: "quota_free_image_limit",
+  deAiLimit: "quota_free_de_ai_limit",
 };
 
 export async function ensureSystemSettingsTable() {
@@ -221,6 +222,9 @@ export async function getQuotaFreeRollingSettings() {
     imageLimit:
       parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.imageLimit], undefined) ||
       envInt("QUOTA_FREE_IMAGE_LIMIT", 3),
+    deAiLimit:
+      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.deAiLimit], undefined) ||
+      envInt("QUOTA_FREE_DE_AI_LIMIT", 1),
   };
 }
 
@@ -252,12 +256,19 @@ export async function updateQuotaFreeRollingSettings(payload) {
     0,
     10000,
   );
+  const deAiLimit = clampInt(
+    "FREE_DE_AI_LIMIT",
+    p.deAiLimit ?? p.de_ai_limit,
+    0,
+    10000,
+  );
 
   await upsertSystemSettings({
     [QUOTA_FREE_ROLLING_KEYS.textPeriodDays]: String(textPeriodDays),
     [QUOTA_FREE_ROLLING_KEYS.imagePeriodDays]: String(imagePeriodDays),
     [QUOTA_FREE_ROLLING_KEYS.textLimit]: String(textLimit),
     [QUOTA_FREE_ROLLING_KEYS.imageLimit]: String(imageLimit),
+    [QUOTA_FREE_ROLLING_KEYS.deAiLimit]: String(deAiLimit),
   });
 
   return getQuotaFreeRollingSettings();
