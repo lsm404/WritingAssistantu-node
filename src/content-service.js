@@ -3,6 +3,7 @@ import { getImageGenerationSettings, getTextGenerationSettings } from "./system-
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
+const GEMINI_MODEL_ERROR_CODE = "GEMINI_MODEL_CONNECTING";
 const CLAUDE_MODEL_IDENTITY_INSTRUCTION = "你是 Claude 模型。";
 const LEGACY_GENERIC_PROMPT_MARKERS = [
   "写出一篇真正像人类公众号作者深夜亲自写出来的内容",
@@ -377,18 +378,24 @@ export async function generateArticleContent(payload, userId = null) {
     },
   });
 
-  const response = await fetch(requestUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let response;
+  let data;
+  try {
+    response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+    data = await parseJsonResponse(response);
+  } catch {
+    throw new Error(GEMINI_MODEL_ERROR_CODE);
+  }
 
-  const data = await parseJsonResponse(response);
   if (!response.ok) {
-    throw new Error(data.error?.message || data.error?.code || data.message || "ARTICLE_GENERATE_FAILED");
+    throw new Error(GEMINI_MODEL_ERROR_CODE);
   }
 
   const articleMd = extractArticleMarkdown(data);
@@ -919,18 +926,24 @@ export async function generateImageContent(payload) {
   const requests = Array.from({ length: n }, async () => {
     const requestBody = imageRequestBody;
 
-    const response = await fetch(imageUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
+    let response;
+    let data;
+    try {
+      response = await fetch(imageUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+      });
+      data = await parseJsonResponse(response);
+    } catch {
+      throw new Error(GEMINI_MODEL_ERROR_CODE);
+    }
 
-    const data = await parseJsonResponse(response);
     if (!response.ok) {
-      throw new Error(data.error?.message || data.error?.code || data.message || "IMAGE_GENERATE_FAILED");
+      throw new Error(GEMINI_MODEL_ERROR_CODE);
     }
 
     return data;

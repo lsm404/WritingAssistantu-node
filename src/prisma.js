@@ -121,6 +121,17 @@ export async function ensureDatabaseSetup() {
     ALTER TABLE plans ADD COLUMN IF NOT EXISTS de_ai_monthly_limit INT NOT NULL DEFAULT 0
   `);
   await prisma.$executeRawUnsafe(`
+    ALTER TABLE plans ADD COLUMN IF NOT EXISTS plan_category TEXT NOT NULL DEFAULT 'text_image'
+  `);
+  await prisma.$executeRawUnsafe(`
+    UPDATE plans
+    SET plan_category = CASE
+      WHEN image_monthly_limit <= 0 THEN 'text_only'
+      ELSE 'text_image'
+    END
+    WHERE plan_category IS NULL OR plan_category = ''
+  `);
+  await prisma.$executeRawUnsafe(`
     UPDATE plans
     SET text_monthly_limit = CASE
       WHEN text_monthly_limit IS NULL THEN GREATEST(text_daily_limit, 0) * 30

@@ -73,17 +73,16 @@ function parseFreeImageAnchor(raw) {
  */
 function normalizeQuotaRowWithPolicy(row, now, freePolicy) {
   const todayKey = getTodayKey(now);
-  const monthKey = getMonthKey(now);
 
   if (!freePolicy) {
     return {
       userId: row.userId,
-      textUsed: row.textDate === monthKey ? row.textUsed : 0,
-      textDate: monthKey,
-      imageUsed: row.imageMonth === monthKey ? row.imageUsed : 0,
-      imageMonth: monthKey,
-      deAiUsed: row.deAiPeriod === monthKey ? row.deAiUsed : 0,
-      deAiPeriod: monthKey,
+      textUsed: Number(row.textUsed || 0),
+      textDate: String(row.textDate || "membership_total"),
+      imageUsed: Number(row.imageUsed || 0),
+      imageMonth: String(row.imageMonth || "membership_total"),
+      deAiUsed: Number(row.deAiUsed || 0),
+      deAiPeriod: String(row.deAiPeriod || "membership_total"),
     };
   }
 
@@ -131,16 +130,6 @@ function ymdToUtcStartIso(ymd) {
   return new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)).toISOString();
 }
 
-/** 付费：下个月 1 日 UTC 0 点起重新计文章和配图额度 */
-function firstDayNextMonthUtcStartIso(now = new Date()) {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  if (m === 11) {
-    return new Date(Date.UTC(y + 1, 0, 1, 0, 0, 0, 0)).toISOString();
-  }
-  return new Date(Date.UTC(y, m + 1, 1, 0, 0, 0, 0)).toISOString();
-}
-
 /**
  * @param {object} normalized
  * @param {object} limits
@@ -151,11 +140,11 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
   const textReset =
     freePolicy != null
       ? { resetMode: "rolling_days", resetEveryDays: freePolicy.textPeriodDays }
-      : { resetMode: "calendar_month", resetEveryDays: null };
+      : { resetMode: "membership_total", resetEveryDays: null };
   const imageReset =
     freePolicy != null
       ? { resetMode: "rolling_days", resetEveryDays: freePolicy.imagePeriodDays }
-      : { resetMode: "calendar_month", resetEveryDays: null };
+      : { resetMode: "membership_total", resetEveryDays: null };
 
   let textQuotaRefreshAt = null;
   let imageQuotaRefreshAt = null;
@@ -172,9 +161,6 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
       const nextImgYmd = addDaysYmdString(imgAnchor, freePolicy.imagePeriodDays);
       imageQuotaRefreshAt = ymdToUtcStartIso(nextImgYmd);
     }
-  } else {
-    textQuotaRefreshAt = firstDayNextMonthUtcStartIso(now);
-    imageQuotaRefreshAt = firstDayNextMonthUtcStartIso(now);
   }
 
   return {
@@ -201,7 +187,7 @@ function buildQuotaSummaryPayload(normalized, limits, freePolicy, now = new Date
       used: normalized.deAiUsed,
       remaining: Math.max(limits.deAiMonthly - normalized.deAiUsed, 0),
       periodKey: normalized.deAiPeriod,
-      quotaRefreshAt: freePolicy ? textQuotaRefreshAt : firstDayNextMonthUtcStartIso(now),
+      quotaRefreshAt: freePolicy ? textQuotaRefreshAt : null,
       ...textReset,
     },
   };
@@ -241,7 +227,7 @@ export async function ensureUserQuota(userId) {
 }
 
 export async function resetPaidUserQuota(userId, tx = prisma) {
-  const monthKey = getMonthKey(new Date());
+  const quotaKey = `membership_total:${Date.now()}`;
 
   await tx.$executeRawUnsafe(
     `
@@ -250,7 +236,7 @@ export async function resetPaidUserQuota(userId, tx = prisma) {
       ON CONFLICT (user_id) DO NOTHING
     `,
     userId,
-    monthKey,
+    quotaKey,
   );
 
   await tx.$executeRawUnsafe(
@@ -267,7 +253,7 @@ export async function resetPaidUserQuota(userId, tx = prisma) {
       WHERE user_id = $1
     `,
     userId,
-    monthKey,
+    quotaKey,
   );
 }
 

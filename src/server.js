@@ -41,6 +41,7 @@ import {
   listUsersWithMembershipsPage,
   purchasePlan,
   recordArticleGenerationLog,
+  resolvePlanDurationDaysByName,
 } from "./membership-service.js";
 import {
   getImageGenerationSettings,
@@ -69,6 +70,100 @@ const PORT = Number(process.env.PORT || 3100);
 const WECHAT_COVER_MAX_BYTES = 5 * 1024 * 1024;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const GEMINI_MODEL_CONNECTING_MESSAGE = "Gemini模型连接中，稍后再试.......";
+
+const ERROR_MESSAGE_MAP = {
+  INVALID_JSON: "请求数据格式不正确",
+  BODY_TOO_LARGE: "请求内容过大",
+  INVALID_COUNT: "数量参数不正确",
+  SYNC_OPENCLAW_FAILED: "同步授权码失败，请稍后再试",
+  UNAUTHORIZED: "登录已过期，请重新登录",
+  FORBIDDEN: "没有权限执行该操作",
+  NOT_FOUND: "接口不存在",
+  INTERNAL_SERVER_ERROR: "服务器异常，请稍后再试",
+  INVALID_EMAIL: "邮箱格式不正确",
+  PASSWORD_TOO_SHORT: "密码长度不能少于 6 位",
+  INVALID_DISPLAY_NAME: "昵称不能为空",
+  EMAIL_ALREADY_EXISTS: "该邮箱已注册",
+  INVALID_CREDENTIALS: "账号或密码错误",
+  USER_DISABLED: "账号已停用",
+  ADMIN_DISABLED: "管理员账号已停用",
+  INVALID_STATUS: "状态参数不正确",
+  LOGIN_FAILED: "登录失败，请稍后再试",
+  REGISTER_FAILED: "注册失败，请稍后再试",
+  REGISTRATION_IP_LIMIT: "当前 IP 注册次数过多，请稍后再试",
+  REGISTRATION_SUBNET_LIMIT: "当前网络注册次数过多，请稍后再试",
+  REGISTRATION_DEVICE_LIMIT: "当前设备注册次数过多，请稍后再试",
+  INVALID_INVITE_CODE: "邀请码格式不正确",
+  INVITE_CODE_NOT_FOUND: "邀请码不存在",
+  AGENT_DISABLED: "该邀请码暂不可用",
+  INVITE_CODE_GENERATION_FAILED: "邀请码生成失败，请稍后再试",
+  INVALID_AGENT_NAME: "代理名称不能为空",
+  INVALID_AGENT_STATUS: "代理状态不正确",
+  AGENT_RECORD_NOT_FOUND: "代理记录不存在",
+  NOT_AN_AGENT: "当前账号不是代理账号",
+  FETCH_AGENTS_FAILED: "获取代理列表失败",
+  CREATE_AGENT_FAILED: "创建代理失败",
+  UPDATE_AGENT_FAILED: "更新代理失败",
+  DELETE_AGENT_FAILED: "删除代理失败",
+  UPDATE_AGENT_PROFILE_FAILED: "更新代理资料失败",
+  FETCH_USERS_FAILED: "获取用户列表失败",
+  FETCH_OVERVIEW_FAILED: "获取概览数据失败",
+  NAME_AND_CONTENT_REQUIRED: "提示词名称和内容不能为空",
+  PROMPT_NOT_FOUND: "提示词不存在",
+  NO_VALID_UPDATES: "没有可更新的内容",
+  INVALID_BODY: "请求内容不正确",
+  ACCOUNTS_REQUIRED: "公众号账号列表不能为空",
+  ACCOUNT_NAME_AND_ID_REQUIRED: "公众号账号名称和 AppID 不能为空",
+  APP_SECRET_PLAINTEXT_FORBIDDEN: "AppSecret 必须加密传输",
+  APP_SECRET_CIPHER_INVALID: "AppSecret 密文格式不正确",
+  APP_SECRET_DECRYPT_FAILED: "AppSecret 解密失败",
+  TEXT_QUOTA_EXCEEDED: "今日文章生成额度已用完，请开通或升级会员",
+  IMAGE_QUOTA_EXCEEDED: "图片生成额度已用完，请开通或升级会员",
+  DE_AI_QUOTA_EXCEEDED: "去 AI 化额度已用完，请开通或升级会员",
+  INVALID_QUOTA_KIND: "额度类型不正确",
+  INVALID_QUOTA_AMOUNT: "额度数量不正确",
+  PLAN_NOT_FOUND: "套餐不存在",
+  PLAN_CODE_REQUIRED: "套餐编码不能为空",
+  PLAN_CODE_EXISTS: "套餐编码已存在",
+  PLAN_IN_USE: "该套餐已有订单或会员记录，不能删除",
+  LIFETIME_ALREADY_ACTIVE: "终身会员已生效，无需重复开通",
+  CHECKOUT_FAILED: "创建订单失败，请稍后再试",
+  CREATE_PLAN_FAILED: "创建套餐失败",
+  UPDATE_PLAN_FAILED: "更新套餐失败",
+  DELETE_PLAN_FAILED: "删除套餐失败",
+  GRANT_FAILED: "开通会员失败",
+  REVOKE_FAILED: "关闭会员失败",
+  UPDATE_FAILED: "保存失败，请稍后再试",
+  ARK_API_KEY_MISSING: "文本生成 API Key 未配置",
+  ARK_MODEL_MISSING: "文本生成模型未配置",
+  ARK_IMAGE_API_KEY_MISSING: "图片生成 API Key 未配置",
+  ARK_IMAGE_MODEL_MISSING: "图片生成模型未配置",
+  TOPIC_REQUIRED: "请先填写文章主题",
+  SOURCE_ARTICLE_REQUIRED: "参考改写模式下，请先填写参考文章",
+  PROMPT_REQUIRED: "请先填写图片描述",
+  ARTICLE_GENERATE_FAILED: GEMINI_MODEL_CONNECTING_MESSAGE,
+  IMAGE_GENERATE_FAILED: GEMINI_MODEL_CONNECTING_MESSAGE,
+  ARTICLE_EMPTY: GEMINI_MODEL_CONNECTING_MESSAGE,
+  GEMINI_MODEL_CONNECTING: GEMINI_MODEL_CONNECTING_MESSAGE,
+  IMAGE_GENERATION_NOT_ALLOWED_FOR_BASIC_PLAN: "当前套餐不支持图片生成",
+  FILE_REQUIRED: "请上传文件",
+  WECHAT_THUMB_TOO_LARGE: "封面图大小不能超过 5MB",
+  WECHAT_APPID_MISSING: "请先填写公众号 AppID",
+  WECHAT_APPSECRET_MISSING: "请先填写公众号 AppSecret",
+  WECHAT_THUMB_MEDIA_ID_MISSING: "请先上传封面图或填写 thumb_media_id",
+  TITLE_REQUIRED: "请先补充文章标题",
+  CONTENT_REQUIRED: "请先生成文章内容",
+  WECHAT_TOKEN_FAILED: "获取微信访问凭证失败，请检查公众号配置",
+  WECHAT_UPLOAD_FAILED: "上传微信素材失败，请稍后再试",
+  WECHAT_DRAFT_FAILED: "发送到微信草稿箱失败，请稍后再试",
+  WECHAT_ARTICLE_IMAGE_FETCH_FAILED: "获取文章图片失败，请检查图片链接",
+  WECHAT_ARTICLE_IMAGE_INVALID_CONTENT_TYPE: "文章图片格式不支持",
+  WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED: "上传文章图片到微信失败",
+  UPSTREAM_INVALID_JSON: "上游服务返回异常，请稍后再试",
+  UPSTREAM_UNREACHABLE: "后端服务暂不可用，请稍后再试",
+  DATABASE_URL_MISSING: "数据库连接未配置",
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -104,11 +199,68 @@ await ensureBootstrapAgentIfEmpty();
 ensureWechatAccountTransportKeys();
 
 function sendJson(response, statusCode, payload) {
+  const body = normalizeResponsePayload(payload);
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   });
-  response.end(JSON.stringify(payload));
+  response.end(JSON.stringify(body));
+}
+
+function normalizeResponsePayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const normalized = { ...payload };
+  const hasError = Object.prototype.hasOwnProperty.call(normalized, "error");
+  if (hasError) {
+    const originalCode = String(normalized.error || "INTERNAL_SERVER_ERROR");
+    normalized.error = getChineseErrorMessage(originalCode);
+  }
+
+  if (hasError && Object.prototype.hasOwnProperty.call(normalized, "message")) {
+    const originalMessage = String(normalized.message || "");
+    normalized.message = getChineseErrorMessage(originalMessage);
+  }
+
+  return normalized;
+}
+
+function getChineseErrorMessage(rawCode) {
+  const code = String(rawCode || "INTERNAL_SERVER_ERROR").trim();
+  if (!code) {
+    return ERROR_MESSAGE_MAP.INTERNAL_SERVER_ERROR;
+  }
+
+  if (isGeminiModelErrorCode(code)) {
+    return GEMINI_MODEL_CONNECTING_MESSAGE;
+  }
+
+  if (code.startsWith("PLAN_WECHAT_LIMIT_EXCEEDED:")) {
+    const limit = code.split(":")[1] || "1";
+    return `当前套餐最多可绑定 ${limit} 个公众号`;
+  }
+
+  if (code.startsWith("PLAN_NOT_FOUND:")) {
+    return ERROR_MESSAGE_MAP.PLAN_NOT_FOUND;
+  }
+
+  if (code.endsWith("_OUT_OF_RANGE")) {
+    return "配置数值超出允许范围";
+  }
+
+  const prefix = code.split(":")[0];
+  return ERROR_MESSAGE_MAP[code] || ERROR_MESSAGE_MAP[prefix] || "操作失败，请稍后再试";
+}
+
+function isGeminiModelErrorCode(code) {
+  return [
+    "ARTICLE_GENERATE_FAILED",
+    "IMAGE_GENERATE_FAILED",
+    "ARTICLE_EMPTY",
+    "GEMINI_MODEL_CONNECTING",
+  ].includes(code);
 }
 
 function getAuthToken(request) {
@@ -1342,11 +1494,17 @@ const server = http.createServer(async (request, response) => {
           throw new Error(`PLAN_NOT_FOUND: ${planId}`);
         }
 
+        const durationDays = resolvePlanDurationDaysByName(
+          body.name ?? plan.name,
+          body.durationDays ?? plan.durationDays ?? 30,
+        );
+
         const updated = await prisma.plan.update({
           where: { id: plan.id },
           data: {
             name: body.name,
             priceCents: body.priceCents,
+            durationDays,
             isActive: body.isActive,
             textDailyLimit:
               body.textMonthlyLimit !== undefined
@@ -1356,15 +1514,29 @@ const server = http.createServer(async (request, response) => {
               body.textMonthlyLimit !== undefined
                 ? Math.max(0, Math.round(Number(body.textMonthlyLimit || 0)))
                 : undefined,
-            imageMonthlyLimit: body.imageMonthlyLimit,
+            imageMonthlyLimit:
+              body.planCategory === "text_only"
+                ? 0
+                : body.imageMonthlyLimit,
             deAiMonthlyLimit: body.deAiMonthlyLimit,
             wechatAccountLimit: body.wechatAccountLimit,
             tagline: body.tagline,
             featuresJson: Array.isArray(body.features) ? JSON.stringify(body.features) : undefined,
           },
         });
+        const planCategory =
+          body.planCategory === "text_only" || body.planCategory === "text_image"
+            ? body.planCategory
+            : undefined;
+        if (planCategory) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE plans SET plan_category = $2 WHERE id = $1`,
+            plan.id,
+            planCategory,
+          );
+        }
 
-        sendJson(response, 200, { ok: true, plan: updated });
+        sendJson(response, 200, { ok: true, plan: planCategory ? { ...updated, planCategory } : updated });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
       }

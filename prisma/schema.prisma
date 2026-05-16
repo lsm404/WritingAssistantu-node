@@ -91,6 +91,7 @@ model Plan {
   isLifetime   Boolean      @default(false) @map("is_lifetime")
   isActive     Boolean      @default(true) @map("is_active")
   sortOrder    Int          @default(0) @map("sort_order")
+  planCategory String       @default("text_image") @map("plan_category")
   textDailyLimit Int        @default(0) @map("text_daily_limit")
   textMonthlyLimit Int?     @map("text_monthly_limit")
   imageMonthlyLimit Int     @default(0) @map("image_monthly_limit")

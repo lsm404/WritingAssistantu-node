@@ -29,10 +29,38 @@ function parsePlanFeatures(plan) {
   }
 }
 
+function normalizePlanCategory(value, imageMonthlyLimit = 0) {
+  const raw = String(value || "").trim();
+  if (raw === "text_only" || raw === "text_image") {
+    return raw;
+  }
+  return Number(imageMonthlyLimit || 0) > 0 ? "text_image" : "text_only";
+}
+
+export function resolvePlanDurationDaysByName(name, fallbackDays = 30) {
+  const raw = String(name || "").trim();
+  if (!raw) {
+    return fallbackDays;
+  }
+
+  if (raw.includes("至尊年卡") || (raw.includes("至尊") && raw.includes("年")) || raw.includes("年卡")) {
+    return 365;
+  }
+  if (raw.includes("进阶季卡") || raw.includes("进阶月卡") || raw.includes("季卡") || raw.includes("季度")) {
+    return 90;
+  }
+  if (raw.includes("基础月卡") || raw.includes("月卡")) {
+    return 30;
+  }
+  return fallbackDays;
+}
+
 function sanitizePlan(plan, options = {}) {
   if (!plan) return null;
   const textMonthlyLimit = resolvePaidTextMonthlyLimit(plan);
   const features = parsePlanFeatures(plan);
+  const planCategory = normalizePlanCategory(plan.planCategory, plan.imageMonthlyLimit);
+  const durationDays = resolvePlanDurationDaysByName(plan.name, plan.durationDays ?? 30);
   return {
     id: plan.id,
     code: plan.code,
@@ -40,10 +68,12 @@ function sanitizePlan(plan, options = {}) {
     billingType: plan.billingType,
     priceCents: plan.priceCents,
     priceLabel: formatPrice(plan.priceCents),
-    durationDays: plan.durationDays,
+    durationDays,
     isLifetime: plan.isLifetime,
     isActive: plan.isActive,
     sortOrder: plan.sortOrder,
+    planCategory,
+    supportsImage: planCategory === "text_image",
     textDailyLimit: plan.textDailyLimit,
     textMonthlyLimit,
     imageMonthlyLimit: plan.imageMonthlyLimit,
@@ -212,9 +242,10 @@ export async function adminGrantMembership(userId, planCode) {
   }
 
   const stamp = new Date();
+  const durationDays = resolvePlanDurationDaysByName(plan.name, plan.durationDays ?? 30);
   const endAt = plan.isLifetime
     ? null
-    : new Date(stamp.getTime() + (plan.durationDays ?? 30) * 24 * 60 * 60 * 1000);
+    : new Date(stamp.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
   await prisma.membership.updateMany({
     where: { userId, status: "active" },
@@ -282,28 +313,37 @@ export async function createPlan(payload = {}) {
 
   const maxSort = await prisma.plan.aggregate({ _max: { sortOrder: true } });
   const textMonthlyLimit = parseNonNegativeInt(payload.textMonthlyLimit, 0);
+  const imageMonthlyLimit = parseNonNegativeInt(payload.imageMonthlyLimit, 0);
+  const planName = String(payload.name || code).trim();
+  const planCategory = normalizePlanCategory(payload.planCategory, imageMonthlyLimit);
+  const durationDays = resolvePlanDurationDaysByName(planName, parseNonNegativeInt(payload.durationDays, 30) || 30);
   const plan = await prisma.plan.create({
     data: {
       id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       code,
-      name: String(payload.name || code).trim(),
+      name: planName,
       billingType: String(payload.billingType || "monthly").trim() || "monthly",
       priceCents: parseNonNegativeInt(payload.priceCents, 0),
-      durationDays: payload.isLifetime ? null : parseNonNegativeInt(payload.durationDays, 30) || 30,
-      isLifetime: Boolean(payload.isLifetime),
+      durationDays,
+      isLifetime: false,
       isActive: payload.isActive !== false,
       sortOrder: parseNonNegativeInt(payload.sortOrder, (maxSort._max.sortOrder ?? 0) + 1),
       textDailyLimit: Math.max(0, Math.round(textMonthlyLimit / 30)),
       textMonthlyLimit,
-      imageMonthlyLimit: parseNonNegativeInt(payload.imageMonthlyLimit, 0),
+      imageMonthlyLimit: planCategory === "text_only" ? 0 : imageMonthlyLimit,
       deAiMonthlyLimit: parseNonNegativeInt(payload.deAiMonthlyLimit, 0),
       wechatAccountLimit: parseNonNegativeInt(payload.wechatAccountLimit, 0),
       tagline: String(payload.tagline || "").trim(),
       featuresJson: Array.isArray(payload.features) ? JSON.stringify(payload.features) : JSON.stringify([]),
     },
   });
+  await prisma.$executeRawUnsafe(
+    `UPDATE plans SET plan_category = $2 WHERE id = $1`,
+    plan.id,
+    planCategory,
+  );
 
-  return sanitizePlan(plan);
+  return sanitizePlan({ ...plan, planCategory });
 }
 
 export async function deletePlan(planIdOrCode) {
@@ -383,7 +423,7 @@ export async function purchasePlan(userId, planCode) {
       return;
     }
 
-    const durationDays = Number(plan.durationDays || 30);
+    const durationDays = resolvePlanDurationDaysByName(plan.name, plan.durationDays ?? 30);
     if (activeMembership && !activeMembership.plan.isLifetime) {
       await tx.membership.updateMany({
         where: { userId, status: "active" },
