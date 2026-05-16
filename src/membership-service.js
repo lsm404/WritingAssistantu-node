@@ -136,6 +136,76 @@ function buildUserFilters(filters = {}) {
   return where;
 }
 
+function normalizeUserListSort(value) {
+  const raw = String(value || "").trim();
+  if (raw === "usage_desc" || raw === "last_used_desc" || raw === "created_desc") {
+    return raw;
+  }
+  return "usage_desc";
+}
+
+function normalizeUserListSqlFilters(filters = {}) {
+  const inviteNorm = String(filters.inviteCode ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .slice(0, 8);
+  const agentId = String(filters.agentId ?? "").trim();
+  const search = String(filters.search ?? "").trim();
+  const clauses = [];
+  const params = [];
+
+  const addParam = (value) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  if (inviteNorm.length === 8) {
+    clauses.push(`u.signup_invite_code = ${addParam(inviteNorm)}`);
+  } else if (agentId) {
+    clauses.push(`u.agent_id = ${addParam(agentId)}`);
+  }
+
+  if (search) {
+    const searchParam = addParam(`%${search}%`);
+    clauses.push(`(u.email ILIKE ${searchParam} OR u.display_name ILIKE ${searchParam})`);
+  }
+
+  if (filters.membershipOnly) {
+    clauses.push(`
+      EXISTS (
+        SELECT 1
+        FROM memberships m
+        JOIN plans p ON p.id = m.plan_id
+        WHERE m.user_id = u.id
+          AND m.status = 'active'
+          AND (p.is_lifetime = TRUE OR m.end_at IS NULL OR m.end_at > NOW())
+      )
+    `);
+  }
+
+  return {
+    params,
+    whereSql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+  };
+}
+
+function getUserListOrderSql(sort) {
+  if (sort === "last_used_desc") {
+    return `stats.last_used_at DESC NULLS LAST, u.created_at DESC, u.id ASC`;
+  }
+  if (sort === "created_desc") {
+    return `u.created_at DESC, u.id ASC`;
+  }
+  return `COALESCE(stats.generation_count, 0) DESC, u.created_at DESC, u.id ASC`;
+}
+
+function toIsoOrNull(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 async function getArticleGenerationStats(userIds) {
   if (!userIds.length) {
     return new Map();
@@ -145,14 +215,24 @@ async function getArticleGenerationStats(userIds) {
   const grouped = await prisma.$queryRawUnsafe(
     `
       SELECT user_id AS "userId", COUNT(*)::int AS "count"
+        , MAX(created_at) AS "lastUsedAt"
       FROM article_generation_logs
       WHERE user_id IN (${placeholders})
+        AND kind <> 'image'
       GROUP BY user_id
     `,
     ...userIds,
   );
 
-  return new Map(grouped.map((row) => [row.userId, Number(row.count || 0)]));
+  return new Map(
+    grouped.map((row) => [
+      row.userId,
+      {
+        count: Number(row.count || 0),
+        lastUsedAt: toIsoOrNull(row.lastUsedAt),
+      },
+    ]),
+  );
 }
 
 async function buildUserSummary(user, generationStatsMap, options = {}) {
@@ -169,8 +249,10 @@ async function buildUserSummary(user, generationStatsMap, options = {}) {
     membership: await getMembershipSummary(user.id),
   };
   if (includeSuperAdminFields) {
+    const generationStats = generationStatsMap.get(user.id);
     summary.signupInviteOwnerName = user.invitedBy?.name ?? null;
-    summary.articleGenerationCount = generationStatsMap.get(user.id) ?? 0;
+    summary.articleGenerationCount = generationStats?.count ?? 0;
+    summary.lastArticleGenerationAt = generationStats?.lastUsedAt ?? null;
   }
   return summary;
 }
@@ -491,28 +573,50 @@ export async function listUsersWithMembershipsPage(filters = {}) {
   const pageSize = parsePositiveInt(filters.pageSize, 10, 100);
   const membershipOnly = Boolean(filters.membershipOnly);
   const includeSuperAdminFields = Boolean(filters.includeSuperAdminFields);
-  const baseWhere = buildUserFilters(filters);
-  const where = { ...baseWhere };
+  const sort = includeSuperAdminFields ? normalizeUserListSort(filters.sort) : "created_desc";
+  const { whereSql, params } = normalizeUserListSqlFilters({
+    ...filters,
+    membershipOnly,
+  });
+  const orderSql = getUserListOrderSql(sort);
+  const offset = (page - 1) * pageSize;
 
-  if (membershipOnly) {
-    where.memberships = {
-      some: {
-        status: "active",
-        OR: [{ plan: { isLifetime: true } }, { endAt: null }, { endAt: { gt: new Date() } }],
-      },
-    };
-  }
+  const countRows = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS "count" FROM users u ${whereSql}`,
+    ...params,
+  );
+  const total = Number(countRows[0]?.count || 0);
 
-  const [total, users] = await Promise.all([
-    prisma.user.count({ where: Object.keys(where).length ? where : undefined }),
-    prisma.user.findMany({
-      where: Object.keys(where).length ? where : undefined,
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+  const idParams = [...params, offset, pageSize];
+  const offsetPlaceholder = `$${idParams.length - 1}`;
+  const limitPlaceholder = `$${idParams.length}`;
+  const idRows = await prisma.$queryRawUnsafe(
+    `
+      SELECT u.id
+      FROM users u
+      LEFT JOIN (
+        SELECT user_id, COUNT(*)::int AS generation_count, MAX(created_at) AS last_used_at
+        FROM article_generation_logs
+        WHERE kind <> 'image'
+        GROUP BY user_id
+      ) stats ON stats.user_id = u.id
+      ${whereSql}
+      ORDER BY ${orderSql}
+      OFFSET ${offsetPlaceholder}
+      LIMIT ${limitPlaceholder}
+    `,
+    ...idParams,
+  );
+  const orderedIds = idRows.map((row) => row.id).filter(Boolean);
+
+  const unorderedUsers = orderedIds.length
+    ? await prisma.user.findMany({
+      where: { id: { in: orderedIds } },
       include: includeSuperAdminFields ? { invitedBy: { select: { name: true } } } : undefined,
-    }),
-  ]);
+    })
+    : [];
+  const userById = new Map(unorderedUsers.map((user) => [user.id, user]));
+  const users = orderedIds.map((id) => userById.get(id)).filter(Boolean);
   const generationStatsMap = includeSuperAdminFields
     ? await getArticleGenerationStats(users.map((user) => user.id))
     : new Map();
@@ -524,6 +628,7 @@ export async function listUsersWithMembershipsPage(filters = {}) {
     pagination: {
       page,
       pageSize,
+      sort,
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     },
@@ -548,7 +653,7 @@ export async function recordArticleGenerationLog(userId, payload = {}, result = 
       ${userId},
       ${kind},
       ${String(payload.client_source || "unknown").trim().slice(0, 40) || "unknown"},
-      ${String(payload.topic || "").trim().slice(0, 240) || null},
+      ${String(payload.topic || payload.prompt || "").trim().slice(0, 240) || null},
       ${String(payload.creation_mode || "").trim().slice(0, 40) || null},
       ${String(result.meta?.model || "").trim().slice(0, 120) || null},
       ${String(result.article_md || "").length},

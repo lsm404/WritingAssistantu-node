@@ -11,6 +11,7 @@ import {
   getWechatAccountTransportPublicKeyPem,
 } from "./wechat-account-transport-crypto.js";
 import {
+  adminDeleteUser,
   adminSetUserStatus,
   ensureDefaultAdmin,
   getUserModelConfig,
@@ -1048,6 +1049,7 @@ const server = http.createServer(async (request, response) => {
         const page = requestUrl.searchParams.get("page") || "1";
         const pageSize = requestUrl.searchParams.get("pageSize") || "10";
         const search = requestUrl.searchParams.get("search") || "";
+        const sort = requestUrl.searchParams.get("sort") || "";
         sendJson(
           response,
           200,
@@ -1057,6 +1059,7 @@ const server = http.createServer(async (request, response) => {
             search,
             page,
             pageSize,
+            sort,
             includeSuperAdminFields: auth.admin.role === "super_admin",
           }),
         );
@@ -1087,6 +1090,7 @@ const server = http.createServer(async (request, response) => {
         const page = requestUrl.searchParams.get("page") || "1";
         const pageSize = requestUrl.searchParams.get("pageSize") || "10";
         const search = requestUrl.searchParams.get("search") || "";
+        const sort = requestUrl.searchParams.get("sort") || "";
         sendJson(
           response,
           200,
@@ -1096,6 +1100,7 @@ const server = http.createServer(async (request, response) => {
             search,
             page,
             pageSize,
+            sort,
             membershipOnly: true,
             includeSuperAdminFields: auth.admin.role === "super_admin",
           }),
@@ -1305,7 +1310,13 @@ const server = http.createServer(async (request, response) => {
         } catch (error) {
           const message = error instanceof Error ? error.message : "GRANT_FAILED";
           const statusCode =
-            message === "UNAUTHORIZED" ? 401 : message === "PLAN_NOT_FOUND" ? 400 : 500;
+            message === "UNAUTHORIZED"
+              ? 401
+              : message === "FORBIDDEN"
+                ? 403
+                : message === "PLAN_NOT_FOUND"
+                  ? 400
+                  : 500;
           sendJson(response, statusCode, { error: message });
         }
         return;
@@ -1318,7 +1329,8 @@ const server = http.createServer(async (request, response) => {
           sendJson(response, 200, { ok: true, ...result });
         } catch (error) {
           const message = error instanceof Error ? error.message : "REVOKE_FAILED";
-          sendJson(response, message === "UNAUTHORIZED" ? 401 : 500, { error: message });
+          const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+          sendJson(response, statusCode, { error: message });
         }
         return;
       }
@@ -1346,7 +1358,36 @@ const server = http.createServer(async (request, response) => {
       } catch (error) {
         const message = error instanceof Error ? error.message : "UPDATE_FAILED";
         const statusCode =
-          message === "UNAUTHORIZED" ? 401 : message === "INVALID_STATUS" ? 400 : 500;
+          message === "UNAUTHORIZED"
+            ? 401
+            : message === "FORBIDDEN"
+              ? 403
+              : message === "INVALID_STATUS"
+                ? 400
+                : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    const userDeleteMatch = pathname.match(/^\/api\/v1\/admin\/users\/([^/]+)$/);
+    if (userDeleteMatch && method === "DELETE") {
+      const userId = userDeleteMatch[1];
+
+      try {
+        await requireSuperAdmin(getAuthToken(request));
+        const result = await adminDeleteUser(userId);
+        sendJson(response, 200, { ok: true, ...result });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "DELETE_FAILED";
+        const statusCode =
+          message === "UNAUTHORIZED"
+            ? 401
+            : message === "FORBIDDEN" || message === "USER_DELETE_FORBIDDEN"
+              ? 403
+              : message === "USER_NOT_FOUND"
+                ? 404
+                : 500;
         sendJson(response, statusCode, { error: message });
       }
       return;

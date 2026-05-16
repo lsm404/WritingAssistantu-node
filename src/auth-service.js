@@ -393,6 +393,35 @@ export async function adminSetUserStatus(userId, status) {
   return { user: sanitizeUser(user) };
 }
 
+export async function adminDeleteUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { ownedAgent: { select: { id: true } } },
+  });
+
+  if (!user) {
+    throw new Error("USER_NOT_FOUND");
+  }
+  if (user.role === "admin" || user.role === "agent" || user.ownedAgent) {
+    throw new Error("USER_DELETE_FORBIDDEN");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.registrationDeviceLink.deleteMany({ where: { userId } });
+    await tx.session.deleteMany({ where: { userId } });
+    await tx.membership.deleteMany({ where: { userId } });
+    await tx.order.deleteMany({ where: { userId } });
+    await tx.modelConfig.deleteMany({ where: { userId } });
+    await tx.prompt.deleteMany({ where: { userId } });
+    await tx.wechatAccount.deleteMany({ where: { userId } });
+    await tx.articleGenerationLog.deleteMany({ where: { userId } });
+    await tx.userQuota.deleteMany({ where: { userId } });
+    await tx.user.delete({ where: { id: userId } });
+  });
+
+  return { deleted: true };
+}
+
 export async function requireAdminAccount(token) {
   const sessionAdmin = await getSessionAdmin(token);
   if (sessionAdmin) {
