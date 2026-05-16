@@ -53,6 +53,26 @@ export async function ensureDatabaseSetup() {
   await prisma.$executeRawUnsafe(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_subnet TEXT
   `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS users_signup_ip_created_at_idx
+      ON users(signup_ip, created_at)
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS users_signup_subnet_created_at_idx
+      ON users(signup_subnet, created_at)
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS registration_device_links (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      device_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS registration_device_links_device_id_idx
+      ON registration_device_links(device_id)
+  `);
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS agents (

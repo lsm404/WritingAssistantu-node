@@ -3,6 +3,11 @@ import { prisma } from "./prisma.js";
 import { assertRegistrationAllowed, MIN_DEVICE_ID_LEN } from "./registration-guard.js";
 import { getRegistrationPolicySettings } from "./system-settings-service.js";
 import { resolveActiveAgentByInviteCode } from "./agent-service.js";
+import {
+  getEmailLoginCandidates,
+  isValidEmailAddress,
+  normalizeEmailInput,
+} from "./email-utils.js";
 
 const SESSION_TTL_DAYS = 30;
 
@@ -97,14 +102,14 @@ export async function registerUser({
   signupSubnet: signupSubnetRaw,
   deviceId: deviceIdRaw,
 }) {
-  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const normalizedEmail = normalizeEmailInput(email);
   const normalizedDisplayName = String(displayName || "").trim();
   const rawPassword = String(password || "");
   const signupIp = signupIpRaw ? String(signupIpRaw).trim() || null : null;
   const signupSubnet = signupSubnetRaw ? String(signupSubnetRaw).trim() || null : null;
   const deviceId = deviceIdRaw ? String(deviceIdRaw).trim() : "";
 
-  if (!normalizedEmail || !normalizedEmail.includes("@")) {
+  if (!isValidEmailAddress(normalizedEmail)) {
     throw new Error("INVALID_EMAIL");
   }
   if (rawPassword.length < 6) {
@@ -116,9 +121,8 @@ export async function registerUser({
 
   const agent = await resolveActiveAgentByInviteCode(inviteRaw ?? "");
 
-  const existing = await prisma.user.findUnique({
-    where: { email: normalizedEmail },
-    select: { id: true },
+  const existing = await findUserByEmailCandidates(getEmailLoginCandidates(normalizedEmail), {
+    id: true,
   });
   if (existing) {
     throw new Error("EMAIL_ALREADY_EXISTS");
@@ -165,12 +169,9 @@ export async function registerUser({
 }
 
 export async function loginUser({ email, password }) {
-  const normalizedEmail = String(email || "").trim().toLowerCase();
   const rawPassword = String(password || "");
 
-  const user = await prisma.user.findUnique({
-    where: { email: normalizedEmail },
-  });
+  const user = await findUserByEmailCandidates(getEmailLoginCandidates(email));
   if (!user || !verifyPassword(rawPassword, user.passwordHash)) {
     throw new Error("INVALID_CREDENTIALS");
   }
@@ -196,6 +197,17 @@ export async function loginUser({ email, password }) {
     expiresAt,
     user: sanitizeUser(user),
   };
+}
+
+async function findUserByEmailCandidates(candidates, select) {
+  for (const candidate of candidates) {
+    const user = await prisma.user.findUnique({
+      where: { email: candidate },
+      ...(select ? { select } : {}),
+    });
+    if (user) return user;
+  }
+  return null;
 }
 
 export async function loginAdmin({ phone, password }) {

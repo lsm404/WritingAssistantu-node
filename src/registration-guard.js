@@ -1,25 +1,58 @@
 /** 设备 ID 长度 ≥ 此值才参与「单设备账号数」限制；过短或缺失则仅按 IP/网段 */
 export const MIN_DEVICE_ID_LEN = 8;
 
+function isTrustedProxySource(ip) {
+  if (!ip) return false;
+  if (ip === "127.0.0.1" || ip === "::1" || ip.toLowerCase() === "localhost") return true;
+  if (ip === "::") return true;
+
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (!v4) {
+    const lower = ip.toLowerCase();
+    return lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+  }
+
+  const a = Number(v4[1]);
+  const b = Number(v4[2]);
+  if (a === 10 || a === 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+function firstHeaderIp(value) {
+  if (!value) return "";
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw).split(",")[0]?.trim() || "";
+}
+
+function getForwardedIp(request) {
+  return (
+    firstHeaderIp(request.headers["cf-connecting-ip"]) ||
+    firstHeaderIp(request.headers["true-client-ip"]) ||
+    firstHeaderIp(request.headers["x-real-ip"]) ||
+    firstHeaderIp(request.headers["x-forwarded-for"])
+  );
+}
+
 /**
  * @param {import("http").IncomingMessage} request
  * @returns {string}
  */
 export function getClientIpFromRequest(request) {
-  const trust =
-    process.env.TRUST_PROXY === "1" ||
-    String(process.env.TRUST_PROXY || "").toLowerCase() === "true";
+  const trustSetting = String(process.env.TRUST_PROXY || "").toLowerCase();
+  const trustProxy = trustSetting === "1" || trustSetting === "true" || trustSetting === "always";
+  const remoteIp = normalizeIp(request.socket?.remoteAddress ?? "");
 
-  const xff = request.headers["x-forwarded-for"];
-  if (trust && xff) {
-    const first = String(xff).split(",")[0]?.trim();
-    if (first) {
-      return normalizeIp(first);
+  if (trustProxy && (trustSetting === "always" || isTrustedProxySource(remoteIp))) {
+    const forwardedIp = getForwardedIp(request);
+    if (forwardedIp) {
+      return normalizeIp(forwardedIp);
     }
   }
 
-  const ra = request.socket?.remoteAddress ?? "";
-  return normalizeIp(ra);
+  return remoteIp;
 }
 
 /**

@@ -824,7 +824,8 @@ const server = http.createServer(async (request, response) => {
                 message === "ACCOUNTS_REQUIRED" ||
                 message === "ACCOUNT_NAME_AND_ID_REQUIRED" ||
                 message === "APP_SECRET_PLAINTEXT_FORBIDDEN" ||
-                message === "APP_SECRET_CIPHER_INVALID"
+                message === "APP_SECRET_CIPHER_INVALID" ||
+                message === "APP_SECRET_BASE64_INVALID"
               ? 400
               : message === "APP_SECRET_DECRYPT_FAILED"
                 ? 400

@@ -1,5 +1,6 @@
 import { randomInt, scryptSync, randomBytes } from "node:crypto";
 import { prisma } from "./prisma.js";
+import { isValidEmailAddress, normalizeEmailInput } from "./email-utils.js";
 
 export const DEFAULT_MEMBERSHIP_CONTACT_WECHAT = "Jiale-8888888";
 
@@ -90,11 +91,11 @@ export async function createAgent({ name, email, password, contactWechat }) {
   console.log("[agent-service] createAgent received:", { name, email, password: password ? "***" : "empty" });
   
   const trimmedName = String(name || "").trim();
-  const trimmedEmail = String(email || "").trim().toLowerCase();
+  const trimmedEmail = normalizeEmailInput(email);
   const trimmedContactWechat = String(contactWechat || "").trim();
   
   if (!trimmedName) throw new Error("INVALID_AGENT_NAME");
-  if (!trimmedEmail) throw new Error("INVALID_EMAIL");
+  if (!isValidEmailAddress(trimmedEmail)) throw new Error("INVALID_EMAIL");
   if (!password || password.length < 6) throw new Error("PASSWORD_TOO_SHORT");
 
   return prisma.$transaction(async (tx) => {

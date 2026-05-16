@@ -1,6 +1,28 @@
 import { prisma } from "./prisma.js";
 import { decryptWechatAccountAppSecretTransport } from "./wechat-account-transport-crypto.js";
 
+function decodeWechatAccountAppSecretBase64(value) {
+  if (!value || typeof value !== "string") {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
+    throw new Error("APP_SECRET_BASE64_INVALID");
+  }
+
+  try {
+    const decoded = Buffer.from(trimmed, "base64").toString("utf8");
+    if (Buffer.from(decoded, "utf8").toString("base64") !== trimmed) {
+      throw new Error("APP_SECRET_BASE64_INVALID");
+    }
+    return decoded;
+  } catch {
+    throw new Error("APP_SECRET_BASE64_INVALID");
+  }
+}
+
 export async function getUserWechatAccounts(userId) {
   const rows = await prisma.wechatAccount.findMany({
     where: { userId },
@@ -28,7 +50,8 @@ export async function getUserWechatAccounts(userId) {
 }
 
 /**
- * 全量替换当前用户的公众号账号列表（写入数据库）；接口载荷中 AppSecret 须为 RSA-OAEP 密文字段 appSecretEncrypted。
+ * 全量替换当前用户的公众号账号列表（写入数据库）；接口载荷优先使用 RSA-OAEP 密文字段 appSecretEncrypted。
+ * appSecretBase64 仅用于无 WebCrypto 的临时 HTTP 部署兜底，不提供安全加密。
  */
 export async function replaceUserWechatAccounts(userId, body) {
   if (!body || typeof body !== "object") {
@@ -54,12 +77,18 @@ export async function replaceUserWechatAccounts(userId, body) {
       raw?.appSecretEncrypted !== undefined && raw?.appSecretEncrypted !== null
         ? String(raw.appSecretEncrypted).trim()
         : "";
+    const base64Secret =
+      raw?.appSecretBase64 !== undefined && raw?.appSecretBase64 !== null
+        ? String(raw.appSecretBase64).trim()
+        : "";
     const plainLeak =
       raw?.appSecret !== undefined && raw?.appSecret !== null ? String(raw.appSecret).trim() : "";
 
     let appSecret = "";
     if (cipher) {
       appSecret = decryptWechatAccountAppSecretTransport(cipher);
+    } else if (base64Secret) {
+      appSecret = decodeWechatAccountAppSecretBase64(base64Secret);
     } else if (plainLeak) {
       throw new Error("APP_SECRET_PLAINTEXT_FORBIDDEN");
     }

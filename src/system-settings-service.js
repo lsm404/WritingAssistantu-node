@@ -206,25 +206,29 @@ export async function updateRegistrationPolicySettings(payload) {
 /** 免费额度滚动周期：默认文字 3 天、图片 7 天（会员仍按自然日/自然月） */
 export async function getQuotaFreeRollingSettings() {
   const stored = await getSystemSettings(Object.values(QUOTA_FREE_ROLLING_KEYS));
-  const envInt = (key, fb) =>
-    Number.parseInt(String(process.env[key] ?? "").trim(), 10) || fb;
+  const envInt = (key, fallback) => {
+    const n = Number.parseInt(String(process.env[key] ?? "").trim(), 10);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const settingInt = (storageKey, envKey, fallback) => {
+    const storedValue = parseStoredInt(stored[storageKey], undefined);
+    return storedValue !== undefined ? storedValue : envInt(envKey, fallback);
+  };
 
   return {
-    textPeriodDays:
-      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.textPeriodDays], undefined) ||
-      envInt("QUOTA_FREE_TEXT_PERIOD_DAYS", 7),
-    imagePeriodDays:
-      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.imagePeriodDays], undefined) ||
-      envInt("QUOTA_FREE_IMAGE_PERIOD_DAYS", 7),
-    textLimit:
-      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.textLimit], undefined) ||
-      envInt("QUOTA_FREE_TEXT_LIMIT", 2),
-    imageLimit:
-      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.imageLimit], undefined) ||
-      envInt("QUOTA_FREE_IMAGE_LIMIT", 3),
-    deAiLimit:
-      parseStoredInt(stored[QUOTA_FREE_ROLLING_KEYS.deAiLimit], undefined) ||
-      envInt("QUOTA_FREE_DE_AI_LIMIT", 1),
+    textPeriodDays: settingInt(
+      QUOTA_FREE_ROLLING_KEYS.textPeriodDays,
+      "QUOTA_FREE_TEXT_PERIOD_DAYS",
+      7,
+    ),
+    imagePeriodDays: settingInt(
+      QUOTA_FREE_ROLLING_KEYS.imagePeriodDays,
+      "QUOTA_FREE_IMAGE_PERIOD_DAYS",
+      7,
+    ),
+    textLimit: settingInt(QUOTA_FREE_ROLLING_KEYS.textLimit, "QUOTA_FREE_TEXT_LIMIT", 2),
+    imageLimit: settingInt(QUOTA_FREE_ROLLING_KEYS.imageLimit, "QUOTA_FREE_IMAGE_LIMIT", 3),
+    deAiLimit: settingInt(QUOTA_FREE_ROLLING_KEYS.deAiLimit, "QUOTA_FREE_DE_AI_LIMIT", 1),
   };
 }
 
