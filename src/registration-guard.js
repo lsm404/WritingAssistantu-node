@@ -21,17 +21,46 @@ function isTrustedProxySource(ip) {
   return false;
 }
 
+function isEmptyIpValue(value) {
+  const s = String(value || "").trim().toLowerCase();
+  return !s || s === "unknown" || s === "null" || s === "undefined";
+}
+
 function firstHeaderIp(value) {
   if (!value) return "";
   const raw = Array.isArray(value) ? value[0] : value;
-  return String(raw).split(",")[0]?.trim() || "";
+  for (const part of String(raw).split(",")) {
+    const candidate = normalizeIp(part);
+    if (!isEmptyIpValue(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function firstForwardedHeaderIp(value) {
+  if (!value) return "";
+  const raw = Array.isArray(value) ? value[0] : value;
+  for (const part of String(raw).split(",")) {
+    const match = /(?:^|;)\s*for=(?:"?)([^;,"]+)/i.exec(part);
+    const candidate = normalizeIp(match?.[1] || "");
+    if (!isEmptyIpValue(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
 }
 
 function getForwardedIp(request) {
   return (
+    firstForwardedHeaderIp(request.headers["forwarded"]) ||
     firstHeaderIp(request.headers["cf-connecting-ip"]) ||
     firstHeaderIp(request.headers["true-client-ip"]) ||
     firstHeaderIp(request.headers["x-real-ip"]) ||
+    firstHeaderIp(request.headers["x-client-ip"]) ||
+    firstHeaderIp(request.headers["x-cluster-client-ip"]) ||
+    firstHeaderIp(request.headers["fastly-client-ip"]) ||
+    firstHeaderIp(request.headers["x-original-forwarded-for"]) ||
     firstHeaderIp(request.headers["x-forwarded-for"])
   );
 }
@@ -44,15 +73,23 @@ export function getClientIpFromRequest(request) {
   const trustSetting = String(process.env.TRUST_PROXY || "").toLowerCase();
   const trustProxy = trustSetting === "1" || trustSetting === "true" || trustSetting === "always";
   const remoteIp = normalizeIp(request.socket?.remoteAddress ?? "");
+  const remoteIsTrustedProxy = isTrustedProxySource(remoteIp);
+  const fromOpenClawProxy =
+    remoteIsTrustedProxy && String(request.headers["x-openclaw-proxy"] || "").toLowerCase() === "web";
 
-  if (trustProxy && (trustSetting === "always" || isTrustedProxySource(remoteIp))) {
+  if (trustSetting === "always" || trustProxy || remoteIsTrustedProxy || fromOpenClawProxy) {
     const forwardedIp = getForwardedIp(request);
     if (forwardedIp) {
-      return normalizeIp(forwardedIp);
+      return forwardedIp;
+    }
+
+    // 如果请求来自本机 / 内网代理但没有真实 IP 头，不要把代理自身 IP 当作所有用户的注册 IP。
+    if (remoteIsTrustedProxy || fromOpenClawProxy || trustSetting === "always") {
+      return "";
     }
   }
 
-  return remoteIp;
+  return isEmptyIpValue(remoteIp) ? "" : remoteIp;
 }
 
 /**
@@ -61,11 +98,17 @@ export function getClientIpFromRequest(request) {
  */
 export function normalizeIp(raw) {
   let s = String(raw).trim();
+  if (isEmptyIpValue(s)) {
+    return "";
+  }
   if (s.startsWith("::ffff:")) {
     s = s.slice(7);
   }
   if (s.startsWith("[") && s.includes("]")) {
     s = s.slice(1, s.indexOf("]"));
+  }
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(s)) {
+    s = s.slice(0, s.lastIndexOf(":"));
   }
   return s;
 }

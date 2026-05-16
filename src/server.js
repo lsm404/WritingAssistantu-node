@@ -92,6 +92,7 @@ const ERROR_MESSAGE_MAP = {
   INVALID_STATUS: "状态参数不正确",
   LOGIN_FAILED: "登录失败，请稍后再试",
   REGISTER_FAILED: "注册失败，请稍后再试",
+  REGISTRATION_IP_REQUIRED: "未获取到真实注册 IP，请检查反向代理配置",
   REGISTRATION_IP_LIMIT: "当前 IP 注册次数过多，请稍后再试",
   REGISTRATION_SUBNET_LIMIT: "当前网络注册次数过多，请稍后再试",
   REGISTRATION_DEVICE_LIMIT: "当前设备注册次数过多，请稍后再试",
@@ -893,6 +894,9 @@ const server = http.createServer(async (request, response) => {
 
       try {
         const ip = getClientIpFromRequest(request);
+        if (!ip) {
+          throw new Error("REGISTRATION_IP_REQUIRED");
+        }
         const subnet = computeSubnetKey(ip);
         const deviceHeader = request.headers["x-device-id"];
         const deviceId =
@@ -923,7 +927,8 @@ const server = http.createServer(async (request, response) => {
           message === "INVALID_DISPLAY_NAME" ||
           message === "INVALID_INVITE_CODE" ||
           message === "INVITE_CODE_NOT_FOUND" ||
-          message === "AGENT_DISABLED"
+          message === "AGENT_DISABLED" ||
+          message === "REGISTRATION_IP_REQUIRED"
             ? 400
             : tooMany
               ? 429
