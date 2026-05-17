@@ -88,6 +88,7 @@ const ERROR_MESSAGE_MAP = {
   EMAIL_ALREADY_EXISTS: "该邮箱已注册",
   INVALID_CREDENTIALS: "账号或密码错误",
   USER_DISABLED: "账号已停用",
+  USER_NOT_FOUND: "用户不存在",
   ADMIN_DISABLED: "管理员账号已停用",
   INVALID_STATUS: "状态参数不正确",
   LOGIN_FAILED: "登录失败，请稍后再试",
@@ -103,6 +104,7 @@ const ERROR_MESSAGE_MAP = {
   INVALID_AGENT_NAME: "代理名称不能为空",
   INVALID_AGENT_STATUS: "代理状态不正确",
   AGENT_RECORD_NOT_FOUND: "代理记录不存在",
+  AGENT_GRANT_MEMBERSHIP_DISABLED: "该代理未开启开通会员权限",
   NOT_AN_AGENT: "当前账号不是代理账号",
   FETCH_AGENTS_FAILED: "获取代理列表失败",
   CREATE_AGENT_FAILED: "创建代理失败",
@@ -254,6 +256,41 @@ function getChineseErrorMessage(rawCode) {
 
   const prefix = code.split(":")[0];
   return ERROR_MESSAGE_MAP[code] || ERROR_MESSAGE_MAP[prefix] || "操作失败，请稍后再试";
+}
+
+async function requireMembershipGrantPermission(token, userId) {
+  const auth = await requireAdminAccount(token);
+  if (auth.admin.role === "super_admin") {
+    return auth;
+  }
+
+  if (auth.admin.role !== "agent") {
+    throw new Error("FORBIDDEN");
+  }
+
+  const agent = await getAgentByUserId(auth.admin.id);
+  if (!agent) {
+    throw new Error("AGENT_RECORD_NOT_FOUND");
+  }
+  if (agent.status !== "active") {
+    throw new Error("AGENT_DISABLED");
+  }
+  if (!agent.canGrantMembership) {
+    throw new Error("AGENT_GRANT_MEMBERSHIP_DISABLED");
+  }
+
+  const targetUser = await prisma.user.findUnique({
+    where: { id: String(userId) },
+    select: { id: true, agentId: true },
+  });
+  if (!targetUser) {
+    throw new Error("USER_NOT_FOUND");
+  }
+  if (targetUser.agentId !== agent.id) {
+    throw new Error("FORBIDDEN");
+  }
+
+  return { ...auth, agent };
 }
 
 function isGeminiModelErrorCode(code) {
@@ -1309,7 +1346,7 @@ const server = http.createServer(async (request, response) => {
         }
 
         try {
-          await requireSuperAdmin(getAuthToken(request));
+          await requireMembershipGrantPermission(getAuthToken(request), userId);
           const membership = await adminGrantMembership(userId, body?.planCode);
           sendJson(response, 200, { ok: true, membership });
         } catch (error) {
@@ -1317,11 +1354,16 @@ const server = http.createServer(async (request, response) => {
           const statusCode =
             message === "UNAUTHORIZED"
               ? 401
-              : message === "FORBIDDEN"
+              : message === "FORBIDDEN" ||
+                  message === "AGENT_RECORD_NOT_FOUND" ||
+                  message === "AGENT_DISABLED" ||
+                  message === "AGENT_GRANT_MEMBERSHIP_DISABLED"
                 ? 403
                 : message === "PLAN_NOT_FOUND"
                   ? 400
-                  : 500;
+                  : message === "USER_NOT_FOUND"
+                    ? 404
+                    : 500;
           sendJson(response, statusCode, { error: message });
         }
         return;
@@ -1419,6 +1461,7 @@ const server = http.createServer(async (request, response) => {
             role: "agent",
             inviteCode: agent.inviteCode,
             contactWechat: agent.contactWechat ?? "",
+            canGrantMembership: Boolean(agent.canGrantMembership),
             stats: {
               userCount,
               orderCount,
@@ -1495,6 +1538,7 @@ const server = http.createServer(async (request, response) => {
           email: body.email, 
           password: body.password,
           contactWechat: body.contactWechat,
+          canGrantMembership: body.canGrantMembership,
         });
         sendJson(response, 200, agent);
       } catch (error) {
@@ -1618,6 +1662,7 @@ const server = http.createServer(async (request, response) => {
           name: body?.name,
           status: body?.status,
           contactWechat: body?.contactWechat,
+          canGrantMembership: body?.canGrantMembership,
         });
         sendJson(response, 200, agent);
       } catch (error) {

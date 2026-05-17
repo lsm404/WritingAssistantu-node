@@ -58,6 +58,7 @@ model Agent {
   name        String
   inviteCode  String   @unique @map("invite_code")
   contactWechat String? @map("contact_wechat")
+  canGrantMembership Boolean @default(false) @map("can_grant_membership")
   status      String   @default("active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")

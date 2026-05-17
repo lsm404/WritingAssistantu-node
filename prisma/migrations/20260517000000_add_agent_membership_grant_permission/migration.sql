@@ -1,0 +1,2 @@
+ALTER TABLE "agents"
+ADD COLUMN IF NOT EXISTS "can_grant_membership" BOOLEAN NOT NULL DEFAULT false;

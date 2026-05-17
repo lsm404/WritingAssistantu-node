@@ -12,6 +12,10 @@ function hashPassword(password, salt = randomBytes(16).toString("hex")) {
 
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+function toBooleanPermission(value) {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
 export function normalizeInviteCodeInput(raw) {
   const upper = String(raw || "")
     .toUpperCase()
@@ -80,6 +84,7 @@ export async function listAgentsWithStats() {
     email: a.owner?.email ?? "无账号",
     inviteCode: a.inviteCode,
     contactWechat: a.contactWechat ?? "",
+    canGrantMembership: Boolean(a.canGrantMembership),
     status: a.status,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
@@ -87,7 +92,7 @@ export async function listAgentsWithStats() {
   }));
 }
 
-export async function createAgent({ name, email, password, contactWechat }) {
+export async function createAgent({ name, email, password, contactWechat, canGrantMembership }) {
   console.log("[agent-service] createAgent received:", { name, email, password: password ? "***" : "empty" });
   
   const trimmedName = String(name || "").trim();
@@ -137,6 +142,7 @@ export async function createAgent({ name, email, password, contactWechat }) {
         name: trimmedName,
         inviteCode,
         contactWechat: trimmedContactWechat,
+        canGrantMembership: toBooleanPermission(canGrantMembership),
         status: "active",
       },
       create: {
@@ -144,6 +150,7 @@ export async function createAgent({ name, email, password, contactWechat }) {
         name: trimmedName,
         inviteCode,
         contactWechat: trimmedContactWechat,
+        canGrantMembership: toBooleanPermission(canGrantMembership),
         status: "active",
       },
     });
@@ -174,10 +181,11 @@ export async function getAgentByUserId(userId) {
   });
 }
 
-export async function updateAgent(agentId, { name, status, contactWechat }) {
+export async function updateAgent(agentId, { name, status, contactWechat, canGrantMembership }) {
   const data = { updatedAt: new Date() };
   if (name !== undefined) data.name = String(name).trim();
   if (contactWechat !== undefined) data.contactWechat = String(contactWechat || "").trim();
+  if (canGrantMembership !== undefined) data.canGrantMembership = toBooleanPermission(canGrantMembership);
   if (status !== undefined) {
     if (!["active", "disabled"].includes(status)) throw new Error("INVALID_AGENT_STATUS");
     data.status = status;

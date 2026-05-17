@@ -55,7 +55,12 @@ function sanitizeUser(user) {
     signupInviteCode: user.signupInviteCode ?? null,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
-    ownedAgent: user.ownedAgent ? { inviteCode: user.ownedAgent.inviteCode } : undefined,
+    ownedAgent: user.ownedAgent
+      ? {
+          inviteCode: user.ownedAgent.inviteCode,
+          canGrantMembership: Boolean(user.ownedAgent.canGrantMembership),
+        }
+      : undefined,
   };
 }
 
@@ -284,6 +289,7 @@ export async function loginAdmin({ phone, password }) {
         role: user.role,
         status: user.status,
         inviteCode: user.ownedAgent?.inviteCode,
+        canGrantMembership: Boolean(user.ownedAgent?.canGrantMembership),
       },
     };
   }
@@ -439,6 +445,7 @@ export async function requireAdminAccount(token) {
         role: sessionUser.user.role,
         status: sessionUser.user.status,
         inviteCode: sessionUser.user.ownedAgent?.inviteCode,
+        canGrantMembership: Boolean(sessionUser.user.ownedAgent?.canGrantMembership),
       },
       session: sessionUser.session,
     };

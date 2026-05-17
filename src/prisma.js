@@ -89,6 +89,9 @@ export async function ensureDatabaseSetup() {
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS contact_wechat TEXT
   `);
   await prisma.$executeRawUnsafe(`
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS can_grant_membership BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+  await prisma.$executeRawUnsafe(`
     CREATE UNIQUE INDEX IF NOT EXISTS agents_invite_code_key ON agents(invite_code)
   `);
   await prisma.$executeRawUnsafe(`
