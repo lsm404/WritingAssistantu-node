@@ -37,6 +37,7 @@ import {
   deletePlan,
   getMembershipSummary,
   listAllOrders,
+  listMembershipGrantLogs,
   listPlans,
   listUsersWithMemberships,
   listUsersWithMembershipsPage,
@@ -112,6 +113,7 @@ const ERROR_MESSAGE_MAP = {
   DELETE_AGENT_FAILED: "删除代理失败",
   UPDATE_AGENT_PROFILE_FAILED: "更新代理资料失败",
   FETCH_USERS_FAILED: "获取用户列表失败",
+  FETCH_OPERATION_LOGS_FAILED: "获取操作日志失败",
   FETCH_OVERVIEW_FAILED: "获取概览数据失败",
   NAME_AND_CONTENT_REQUIRED: "提示词名称和内容不能为空",
   PROMPT_NOT_FOUND: "提示词不存在",
@@ -1179,6 +1181,21 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (method === "GET" && pathname === "/api/v1/admin/operation-logs") {
+      try {
+        await requireSuperAdmin(getAuthToken(request));
+        const page = requestUrl.searchParams.get("page") || "1";
+        const pageSize = requestUrl.searchParams.get("pageSize") || "20";
+        const search = requestUrl.searchParams.get("search") || "";
+        sendJson(response, 200, await listMembershipGrantLogs({ page, pageSize, search }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "FETCH_OPERATION_LOGS_FAILED";
+        const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
     if (method === "GET" && pathname === "/api/v1/admin/settings/image-generation") {
       try {
         await requireAdminAccount(getAuthToken(request));
@@ -1346,8 +1363,8 @@ const server = http.createServer(async (request, response) => {
         }
 
         try {
-          await requireMembershipGrantPermission(getAuthToken(request), userId);
-          const membership = await adminGrantMembership(userId, body?.planCode);
+          const grantAuth = await requireMembershipGrantPermission(getAuthToken(request), userId);
+          const membership = await adminGrantMembership(userId, body?.planCode, grantAuth.admin);
           sendJson(response, 200, { ok: true, membership });
         } catch (error) {
           const message = error instanceof Error ? error.message : "GRANT_FAILED";

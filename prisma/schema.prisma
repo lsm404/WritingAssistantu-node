@@ -125,6 +125,27 @@ model Membership {
   @@map("memberships")
 }
 
+model MembershipGrantLog {
+  id              String   @id @default(uuid())
+  actorType       String   @map("actor_type")
+  actorId         String?  @map("actor_id")
+  actorAccount    String   @default("") @map("actor_account")
+  actorName       String   @default("") @map("actor_name")
+  targetUserId    String   @map("target_user_id")
+  targetUserEmail String   @default("") @map("target_user_email")
+  targetUserName  String   @default("") @map("target_user_name")
+  planId          String?  @map("plan_id")
+  planCode        String   @default("") @map("plan_code")
+  planName        String   @default("") @map("plan_name")
+  membershipId    String?  @map("membership_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([targetUserId])
+  @@map("membership_grant_logs")
+}
+
 model Order {
   id          String    @id @default(uuid())
   userId      String    @map("user_id")

@@ -206,6 +206,33 @@ function toIsoOrNull(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function normalizeGrantActor(actor = {}) {
+  return {
+    actorType: String(actor.role || "unknown"),
+    actorId: actor.id ? String(actor.id) : null,
+    actorAccount: String(actor.phone || actor.email || "").trim(),
+    actorName: String(actor.displayName || "").trim(),
+  };
+}
+
+function sanitizeMembershipGrantLog(row) {
+  return {
+    id: row.id,
+    actorType: row.actorType,
+    actorId: row.actorId,
+    actorAccount: row.actorAccount,
+    actorName: row.actorName,
+    targetUserId: row.targetUserId,
+    targetUserEmail: row.targetUserEmail,
+    targetUserName: row.targetUserName,
+    planId: row.planId,
+    planCode: row.planCode,
+    planName: row.planName,
+    membershipId: row.membershipId,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
 async function getArticleGenerationStats(userIds) {
   if (!userIds.length) {
     return new Map();
@@ -317,36 +344,62 @@ export async function listAllOrders(filters = {}) {
   }));
 }
 
-export async function adminGrantMembership(userId, planCode) {
-  const plan = await prisma.plan.findUnique({ where: { code: String(planCode || "").trim() } });
-  if (!plan || !plan.isActive) {
-    throw new Error("PLAN_NOT_FOUND");
-  }
+export async function adminGrantMembership(userId, planCode, actor = {}) {
+  const membership = await prisma.$transaction(async (tx) => {
+    const plan = await tx.plan.findUnique({ where: { code: String(planCode || "").trim() } });
+    if (!plan || !plan.isActive) {
+      throw new Error("PLAN_NOT_FOUND");
+    }
 
-  const stamp = new Date();
-  const durationDays = resolvePlanDurationDaysByName(plan.name, plan.durationDays ?? 30);
-  const endAt = plan.isLifetime
-    ? null
-    : new Date(stamp.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const targetUser = await tx.user.findUnique({
+      where: { id: String(userId) },
+      select: { id: true, email: true, displayName: true },
+    });
+    if (!targetUser) {
+      throw new Error("USER_NOT_FOUND");
+    }
 
-  await prisma.membership.updateMany({
-    where: { userId, status: "active" },
-    data: { status: "replaced", updatedAt: stamp },
+    const stamp = new Date();
+    const durationDays = resolvePlanDurationDaysByName(plan.name, plan.durationDays ?? 30);
+    const endAt = plan.isLifetime
+      ? null
+      : new Date(stamp.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+    await tx.membership.updateMany({
+      where: { userId, status: "active" },
+      data: { status: "replaced", updatedAt: stamp },
+    });
+
+    const created = await tx.membership.create({
+      data: {
+        userId,
+        planId: plan.id,
+        status: "active",
+        startAt: stamp,
+        endAt,
+        source: "manual",
+      },
+      include: { plan: true },
+    });
+
+    await tx.membershipGrantLog.create({
+      data: {
+        ...normalizeGrantActor(actor),
+        targetUserId: targetUser.id,
+        targetUserEmail: targetUser.email,
+        targetUserName: targetUser.displayName,
+        planId: plan.id,
+        planCode: plan.code,
+        planName: plan.name,
+        membershipId: created.id,
+        createdAt: stamp,
+      },
+    });
+
+    await resetPaidUserQuota(userId, tx);
+
+    return created;
   });
-
-  const membership = await prisma.membership.create({
-    data: {
-      userId,
-      planId: plan.id,
-      status: "active",
-      startAt: stamp,
-      endAt,
-      source: "manual",
-    },
-    include: { plan: true },
-  });
-
-  await resetPaidUserQuota(userId);
 
   return sanitizeMembership(membership);
 }
@@ -357,6 +410,44 @@ export async function adminRevokeMembership(userId) {
     data: { status: "cancelled", updatedAt: new Date() },
   });
   return { revoked: result.count };
+}
+
+export async function listMembershipGrantLogs(filters = {}) {
+  const page = parsePositiveInt(filters.page, 1, 100000);
+  const pageSize = parsePositiveInt(filters.pageSize, 20, 100);
+  const search = String(filters.search ?? "").trim();
+  const where = search
+    ? {
+        OR: [
+          { actorAccount: { contains: search, mode: "insensitive" } },
+          { actorName: { contains: search, mode: "insensitive" } },
+          { targetUserEmail: { contains: search, mode: "insensitive" } },
+          { targetUserName: { contains: search, mode: "insensitive" } },
+          { planCode: { contains: search, mode: "insensitive" } },
+          { planName: { contains: search, mode: "insensitive" } },
+        ],
+      }
+    : undefined;
+
+  const [total, rows] = await prisma.$transaction([
+    prisma.membershipGrantLog.count({ where }),
+    prisma.membershipGrantLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+  ]);
+
+  return {
+    logs: rows.map((row) => sanitizeMembershipGrantLog(row)),
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    },
+  };
 }
 
 export async function listPlans(includeInactive = false) {
