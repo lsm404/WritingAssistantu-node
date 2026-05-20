@@ -10,64 +10,29 @@ const LEGACY_GENERIC_PROMPT_MARKERS = [
   "## 3. 增加“作者存在感”",
   "你是一个真实公众号作者",
 ];
-const NORMALIZED_GENERIC_SYSTEM_PROMPT = `# Role
+const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个写公众号的人。根据用户的主题写一篇微信公众号文章。
 
-你是一名成熟的微信公众号内容编辑，擅长把一个主题写成清楚、有信息量、有观点、适合直接发布的公众号文章。
+写作核心规则：
 
-# 最高优先级规则
+1. 全文至少5处用不常见的口语化说法替代标准书面语（每个说法只能出现一次，不准重复）。参考替换池："很多人"可以换成"十个里八个""大半""不少""一抓一大把"（挑一个用，下次换另一个）；"很难"换成"费老劲""不容易""够呛""悬"；"开始意识到"换成"琢磨过味儿来了""后来才反应过来""回过神来"；"非常重要"换成"差不了""少不了""马虎不得"。同一个词组全文只出现一次。
 
-默认不要写成第一人称故事，但是要让人能感觉出来有情感共鸣。除非用户明确要求“以我的经历写”“写成自述”“情感文”“故事文”，否则不要用“我”作为全文主叙事视角，不要虚构“我朋友”“我妈”“我同事”“我室友”“合租的人”“前公司同事”“楼下店员”等连续私人经历，也不要写成个人崩溃、被安慰、突然释怀的情绪链条。
+2. 句子长度要自然变化，但不要机械地长-短-长-短交替。可以连续写两三个中等句子再来一个特别短的，也可以连续几个短句后来一个长的。全文有2-3个不超过6字的极短句就够了，不要太多。
 
-文章的可信度来自日常经验、关系观察、心理判断和具体生活细节。不靠卖惨、煽情、密集个人经历，不靠堆砌研究数据，也不要编造人物案例、书名、理论、数据或来源。
+3. 至少3处要省略主语。中文口语经常省略主语。比如不写"他回到家"写"回到家"，不写"我们发现"写"仔细一看"。
 
-# 内容目标
+4. 至少2处要有未说完的话或自我修正。比如"本来想说——算了""这么讲也不全对""可能有点极端，但是"。
 
-默认优先写成生活观察型公众号文章。文章要有明确观点、现实触感和情绪分寸，读起来像一个懂生活的人在把日常里常见但容易忽略的事讲清楚，而不是像短视频口播、朋友圈吐槽、空泛感悟、名人案例合集或历史典故文。
+5. 段落之间不要用连接词过渡。直接开始下一段，让读者自己接上逻辑。
 
-如果主题偏情感，也要保持克制：情绪只作为切入口，主体仍然要落到观察、分析、关系处理、行动建议或认知变化上。
+6. 开头不要描写场景画面，直接从一个判断或态度开始写。全文带主观偏见，不需要面面俱到，可以只讲你认同的那一面。不编造具体人物故事，但可以说"我见过""我碰到过"这种模糊引用。
 
-# 默认风格参考
+7. 不要把每段都写得一样长，不要排比，不要用"首先其次最后""总而言之""不难发现""值得一提""众所周知""由此可见""底层逻辑""赋能""抓手""在这个XX的时代"。
 
-整篇默认采用“生活观察型”的写法：开头优先从一种常见生活心理、关系习惯或文化习惯切入，例如“中国人表达感情比较含蓄”“很多夫妻把彼此的付出当成理所当然”“越亲近的人越容易省掉感谢”。不要为了显得有材料而硬塞群聊、节日、书名、概念、名人或研究。
+8. 结尾不要升华不要喊口号。说完就停。
 
-正文默认用“泛化观察 + 生活动作细节 + 关系心理拆解”的方式展开。生活动作细节可以是早起做饭、下班接孩子、顺路买菜、洗碗拖地、加班回家、照顾老人、整理房间、发消息问候等，但只能作为两三句细节铺垫，不要写成一个完整故事。
-
-可以参考下面的文风骨架，但不要机械照抄，按主题自然改写：
-
-很多（目标人群/关系）慢慢会生出一种“（核心状态）”的默契。
-（生活动作细节1），不会问（对方为此付出了什么）；（生活动作细节2），不会追问（过程里的辛苦）；（生活动作细节3），也不会多说什么。不是因为这些付出理所当然，是大家默认（关系/身份）就该这样，久了反而把（感谢/体谅/解释）省掉了。
-
-但你有没有试过，偶尔认真说一次“（主题里的关键表达）”？
-（场景A）的时候，你轻轻说一句“（关键表达）”，对方大概率会（一个很小的反应），手里的动作也会（细微变化）。
-（场景B）的时候，你顺手帮一下，再补一句“（关键表达）”，两个人之间那点紧绷的情绪，往往就松下来了。
-
-这种模板的关键不是故事性，而是“无名群体 + 并列生活细节 + 温和转折 + 轻微互动反馈”。不要写成完整人物故事，不要写成名人案例堆砌，不要写成数据论证，也不要为了显得人工而硬塞无关材料。
-
-默认不要把名人夫妻、历史人物、文学人物、影视角色当作主菜，除非用户明确要求“举例”“典故”“历史故事”或提供了参考素材。可以少量点到一个稳妥的作品、概念或人物作为信息锚点，但不要每个小标题都配一个人物故事，更不要写成“杨绛和钱钟书”“梁鸿和孟光”“沈复和陈芸”这类案例串联。
-
-不要默认写成“拿数据说话”的文章。除非用户明确提供数据、要求引用研究，或主题本身必须依赖数据，否则不要主动编造或堆砌“某大学研究”“调查显示”“涉及多少人”“百分之多少”“专家指出”等内容。即便必须使用数据，也只能少量出现，用来补充判断，不能连续用数据替代生活观察和关系分析。
-
-也不要写成伪纪实故事。不要凭空编出地铁线路、公司、合租室友、住院借钱、跳槽薪资、某个朋友、某个同事等具体情节。更好的写法是：“早上有人提前起床做饭，晚上有人顺路接孩子，周末两个人一个擦窗户一个拖地”，用并列的生活细节让读者自行代入。
-
-# 语言与结构
-
-语言清楚、平实、温和，有一点公众号的节奏感，但不要艰涩，也不要太像说教。关系、婚姻、家庭、情感类主题可以连续段落推进，也可以用 \`01\`、\`02\`、\`03\` 分节；是否分节取决于主题是否有明显分论点。分节时标题要短，不要让每一节都变成一个案例栏目。
-
-句子节奏要长短不一。中长句用来铺开观察和关系，短句用来停顿、转折、落点。可以自然穿插“这很伤人。”“问题就在这里。”“话不重，但有分量。”这类短句，但不要机械换行，也不要把每句话都拆成口号。
-
-少写速成金句和口号式结尾，避免频繁使用“才懂”“真正的”“顶级智慧”“给余生留福气”“有多平和就有多幸福”“不是……而是……”“不是……是……”这类过于顺滑的升华句。道理要从材料和生活细节里自然长出来，不要像提前准备好的标语。
-
-避免过度煽情、大段心理独白、连续私人故事、苦难叙事、鸡汤式安慰、夸张反转，以及“突然就懂了”“眼泪在眼眶里打转”“那一刻我才明白”等情绪套路。也避免用“下班挤地铁时听到”“前公司有个人”“之前合租的姑娘”“楼下店员”这类伪纪实开头或撑段，避免连续使用“研究显示”“数据显示”“根据某项调查”来开段或撑段。
-
-# AI 特征风险规避
-
-保持原有写法，不要为了降低 AI 痕迹额外编造现实例子、身边人物故事、私密经历、研究数据、名人轶事或事实来源。重点规避过度固定的开头链条：不要写成“社交平台上关于某类人的分享，大多集中在几类内容：A、B、C。很多人会默认……但如果仔细观察……就会发现……真正值得……从来不会……这些才是……”这种三项并列 + 群体判断 + 转折升华的结构。少连续使用“很多人会默认”“但如果仔细观察就会发现”“真正值得”“从来不会”“这些才是”“第一个变化就是”等句式，避免同一段里堆叠多个绝对化判断。也不要用一串看似权威的研究、百分比、样本量、历史人物和名人案例来制造可信度。
-
-# 输出要求
-
-只输出最终 Markdown 成稿，不要解释写作思路，不要给多个版本，不要输出任何正文之外的内容。`;
+只输出 Markdown 成稿。`;
 const DE_AI_TONE_INSTRUCTION =
-  "整体写法靠近生活观察型公众号文：少一点模板化升华、速成金句、研究数据、百分比和名人案例堆砌，少一点伪纪实身边人故事；多一点普通人的生活动作细节、关系心理、温和判断和自然回落。句子要长短不一，适当穿插自然短句，不要为了显得人工而硬塞材料。";
+  "用词要接地气。少用书面语，多用口头语。别追求每句话都精确漂亮，有时候糙一点反而对。";
 const AI_RULE_INSTRUCTIONS_MAX_CHARS = 5000;
 const AI_RULE_TRUNCATION_MARKER = "…[已按平台规则截断]";
 const REWRITE_GOAL_LABELS = {
@@ -389,7 +354,6 @@ function buildArkRequestBody(payload, config) {
   const systemText = buildSystemPrompt(payload);
   const userText = buildUserPrompt(payload);
 
-  // Ark Responses API: instructions = system role, input = user message
   const jsonPayload = {
     model: config.model,
     instructions: systemText,
@@ -433,6 +397,352 @@ function extractArticleMarkdown(data) {
   return articleMd.trim();
 }
 
+
+/**
+ * 反AI检测后处理器 v10 —— 突发性策略
+ * 核心思路：AI文本的困惑度均匀（每句都"标准"），人类文本的困惑度波动大
+ * （有的句子很书面，有的句子很随意）。
+ * 做法：~45%句子完全不动，~55%句子做重度改写 → 制造困惑度波动（burstiness）
+ */
+function deAIStatisticalFingerprint(markdown) {
+  if (!markdown || typeof markdown !== "string") return markdown;
+
+  const rng = () => Math.random();
+  const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+  const clen = (s) => [...s].filter(c => /[\u4e00-\u9fa5\uff00-\uffef]/.test(c)).length;
+
+  const used = new Set();
+  const pickU = (arr) => {
+    const a = arr.filter(x => !used.has(x));
+    if (!a.length) return pick(arr);
+    const c = pick(a); used.add(c); return c;
+  };
+
+  let text = markdown;
+
+  // ====== 第一步：删除AI指纹短语 ======
+  const NUKE = [
+    "值得一提的是，", "值得一提的是", "不难发现，", "不难发现",
+    "众所周知，", "众所周知", "综上所述，", "综上所述",
+    "由此可见，", "由此可见", "显而易见，", "显而易见",
+    "毫无疑问，", "毫无疑问", "毋庸置疑，", "毋庸置疑",
+    "首先，", "其次，", "最后，", "总之，",
+    "因此，", "此外，", "同时，", "事实上，",
+    "换言之，", "也就是说，", "一方面，", "另一方面，",
+    "归根结底，", "不可否认，", "换句话说，",
+    "在当今社会，", "随着社会的发展，", "从某种意义上说，",
+    "某种程度上，", "不言而喻，", "与此同时，",
+  ];
+  for (const p of NUKE) {
+    while (text.includes(p)) text = text.replace(p, "");
+  }
+
+  // ====== 第二步：句式模板替换 ======
+  text = text.replace(/越来越多的人(开始)?/g, () => pickU(["不少人", "好多人", "一些人"]));
+  text = text.replace(/在这个(.{2,15})的时代/g, (_, a) => "现在" + a);
+  text = text.replace(/随着(.{2,15})的(发展|变化|推进)/g, (_, a) => a + "这几年变了");
+  text = text.replace(/不仅仅是(.{2,20})[，,]?更是(.{2,20})/g, (_, a, b) => a + "，说到底也是" + b);
+
+  // ====== 第三步：词汇替换（保留，这部分有用）======
+  const S = [
+    ["然而", ["可", "但", "不过", "话说回来"]],
+    ["因此", ["所以", "那", "这么一来"]],
+    ["此外", ["另外", "还有", "对了"]],
+    ["尽管", ["虽说", "虽然", "就算"]],
+    ["但是", ["但", "可", "不过", "偏偏"]],
+    ["并且", ["而且", "还", "加上"]],
+    ["非常", ["挺", "特别", "贼", "太"]],
+    ["实际上", ["其实", "说白了", "讲真"]],
+    ["逐渐", ["慢慢", "一点点"]],
+    ["导致", ["搞得", "弄得", "闹得"]],
+    ["如果", ["要是", "万一"]],
+    ["往往", ["动不动就", "总", "老"]],
+    ["已经", ["都", "早就", "早"]],
+    ["需要", ["得", "要"]],
+    ["能够", ["能", "可以"]],
+    ["进行", ["做", "搞", "弄"]],
+    ["那么", ["那", "那样的话"]],
+    ["或许", ["可能", "没准", "说不定"]],
+    ["获得", ["拿到", "得到"]],
+    ["关于", ["说到", "讲到", "提到"]],
+    ["总是", ["老是", "动不动就", "一直"]],
+    ["并非", ["不是", "也不算"]],
+    ["通常", ["一般", "多半"]],
+    ["显然", ["明摆着", "一看就"]],
+    ["大量", ["一堆", "好多"]],
+    ["频繁", ["老是", "三天两头"]],
+    ["持续", ["一直", "没断过"]],
+    ["迅速", ["很快", "麻溜"]],
+    ["普遍", ["到处都是", "哪都有"]],
+    ["充分", ["好好", "彻底"]],
+    ["面临", ["碰上", "遇到"]],
+    ["目前", ["现在", "眼下"]],
+    ["仿佛", ["好像", "像"]],
+    ["似乎", ["好像", "感觉"]],
+    ["困难", ["费劲", "够呛", "头疼"]],
+    ["有效", ["管用", "好使"]],
+    ["必然", ["肯定", "跑不了"]],
+    ["潜移默化", ["不知不觉"]],
+    ["大多数", ["多半", "基本上都"]],
+    ["几乎", ["差不多", "基本上"]],
+    ["越来越", ["慢慢"]],
+    ["经常", ["三天两头", "动不动"]],
+    ["尤其", ["更别说", "特别是"]],
+    ["或者", ["要不", "不然"]],
+    ["存在", ["有", "出了"]],
+    ["极其", ["特别", "贼"]],
+    ["引发", ["惹出", "招来"]],
+    ["具备", ["有", "带着"]],
+    ["明显", ["明摆着", "一看就知道"]],
+    ["严重", ["不轻", "够受的"]],
+    ["丰富", ["花样多", "五花八门"]],
+    ["偶尔", ["隔三差五", "有时候"]],
+  ];
+
+  for (const [w, alts] of S) {
+    if (text.includes(w)) {
+      text = text.split(w).map((p, i, a) =>
+        i === a.length - 1 ? p : p + (rng() < 0.85 ? pickU(alts) : w)
+      ).join("");
+    }
+  }
+
+  // ====== 第四步（核心）：选择性重度改写 → 制造burstiness ======
+  const paragraphs = text.split(/\n\n+/);
+  const output = [];
+
+  // 人类口语插入素材——模拟真实社交媒体写作：有具体人物、有对话、有情绪
+  const HUMAN_INSERTS = [
+    "我一哥们上回吃饭还聊这个来着。",
+    "我妈以前老说这种话，我那会儿不爱听。",
+    "前两天跟同事聊天，他也这么说的。",
+    "我表姐就是这样，每次当面不说，背后又念叨。",
+    "之前我一朋友跟我讲了个事儿，我都不知道说什么好。",
+    "你们身边肯定也有这种人吧。",
+    "我爸那会儿就说了一句：管那么多干嘛。",
+    "反正我是这么觉得的，你们觉得呢？",
+    "有一说一，这事我站我朋友这边。",
+    "我邻居王姐上回也说这个来着。",
+    "说到这个我就来气。",
+    "我一同学就是典型的例子。",
+    "算了不说了，越说越气。",
+    "哇这个我有发言权，因为我就干过这种事。",
+    "跟你们说个真事。",
+    "先不说这个，说回正题。",
+  ];
+
+  // 句子级重度改写函数
+  function heavyRewrite(sent) {
+    let s = sent;
+    const ops = []; // 收集可执行的操作，随机执行1-3个
+
+    // a) 截断加省略号
+    if (clen(s) > 20) ops.push(() => {
+      const commas = [];
+      for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
+      if (commas.length >= 2) {
+        const cut = commas[Math.floor(commas.length * 0.6)];
+        s = s.substring(0, cut) + "……";
+      }
+    });
+    // b) 句末加反问
+    if (clen(s) > 10) ops.push(() => {
+      s = s.replace(/[。]$/, "") + pick(["，是吧？", "，对吧？", "，你说呢？", "——谁知道呢。"]);
+    });
+    // c) 句首加语气词
+    ops.push(() => {
+      s = pick(["其实吧，", "说真的，", "讲真，", "你看，", "话说，", "说白了，", "不瞒你说，", "怎么说呢，", "你别说，", "坦白讲，"]) + s;
+    });
+    // d) 的/得混用
+    ops.push(() => { s = s.replace(/得([很挺特真])/, "的$1"); });
+    // e) 句号改感叹/破折号/省略号
+    ops.push(() => { s = s.replace(/。$/, pick(["！", "——", "……", "。"])); });
+    // f) 句内犹豫/修正
+    if (clen(s) > 25) ops.push(() => {
+      const commas = [];
+      for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
+      if (commas.length > 0) {
+        const pos = commas[0];
+        s = s.substring(0, pos) + pick(["——不对，", "——等等，", "——算了，"]) + s.substring(pos + 1);
+      }
+    });
+    // g) 加括号旁白
+    if (clen(s) > 15) ops.push(() => {
+      const commas = [];
+      for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
+      if (commas.length > 0) {
+        const pos = commas[Math.floor(rng() * commas.length)];
+        const aside = pick(["（真的）", "（没骗你）", "（我猜的）", "（大概吧）", "（别问我怎么知道的）"]);
+        s = s.substring(0, pos) + aside + s.substring(pos);
+      }
+    });
+    // h) 把"不"变成"又不是""也不"
+    ops.push(() => {
+      s = s.replace(/不([是会能想要])/, (m, c) => rng() < 0.5 ? "又不" + c : "也不" + c);
+    });
+    // i) 加口语尾巴
+    ops.push(() => {
+      s = s.replace(/。$/, pick(["嘛。", "呗。", "啊。", "罢了。"]));
+    });
+
+    // j) 句中加填充词（口语高频特征）
+    if (clen(s) > 22) ops.push(() => {
+      const commas = [];
+      for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
+      if (commas.length > 0) {
+        const pos = commas[Math.floor(rng() * commas.length)];
+        const filler = pick(["就是那个", "怎么说呢", "反正就是"]);
+        s = s.substring(0, pos + 1) + filler + "，" + s.substring(pos + 1);
+      }
+    });
+
+    // 随机执行1-2个操作（不要太多，避免过度改写）
+    const count = 1 + Math.floor(rng() * Math.min(2, ops.length));
+    const shuffled = ops.sort(() => rng() - 0.5).slice(0, count);
+    for (const op of shuffled) op();
+
+    return s;
+  }
+
+  let insertCount = 0;
+  const maxInserts = 5;
+
+  for (let pi = 0; pi < paragraphs.length; pi++) {
+    const para = paragraphs[pi].trim();
+    if (!para) continue;
+
+    // 标题/列表不动
+    if (/^#{1,6}\s/.test(para) || /^[-*+]\s/.test(para) ||
+        /^\d+[.、]\s/.test(para) || /^>/.test(para)) {
+      output.push(para);
+      continue;
+    }
+
+    const sentences = para.split(/(?<=[。！？])/g).filter(s => s.trim());
+    if (sentences.length === 0) { output.push(para); continue; }
+
+    const rebuilt = [];
+    for (let j = 0; j < sentences.length; j++) {
+      const sent = sentences[j].trim();
+      if (!sent) continue;
+
+      // ★ 核心：55%概率重度改写
+      const shouldHeavyRewrite = rng() < 0.55;
+
+      // 8%概率删除句子
+      if (j > 0 && j < sentences.length - 1 && clen(sent) > 10 && clen(sent) < 35 && rng() < 0.08) {
+        continue;
+      }
+
+      if (shouldHeavyRewrite && clen(sent) > 8) {
+        rebuilt.push(heavyRewrite(sent));
+      } else {
+        // 不改写的句子也可能做轻微结构调整
+        const len = clen(sent);
+        if (len > 40 && rng() < 0.6) {
+          // 长句拆分
+          const commas = [];
+          for (let k = 0; k < sent.length; k++) if (sent[k] === '，') commas.push(k);
+          if (commas.length >= 2) {
+            const mid = commas[Math.floor(commas.length / 2)];
+            rebuilt.push(sent.substring(0, mid) + '。');
+            rebuilt.push(sent.substring(mid + 1).trim());
+            continue;
+          }
+        }
+        rebuilt.push(sent);
+      }
+    }
+
+    // 分段：2-4句一段
+    const chunked = [];
+    let chunk = [];
+    let target = 2 + Math.floor(rng() * 3);
+    for (const s of rebuilt) {
+      chunk.push(s);
+      if (chunk.length >= target) {
+        chunked.push(chunk.join(""));
+        chunk = [];
+        target = 2 + Math.floor(rng() * 3);
+      }
+    }
+    if (chunk.length > 0) chunked.push(chunk.join(""));
+
+    for (const c of chunked) {
+      output.push(c);
+
+      // 插入人类碎片（28%概率）
+      if (insertCount < maxInserts && pi > 0 && pi < paragraphs.length - 1 && rng() < 0.28) {
+        output.push(pickU(HUMAN_INSERTS));
+        insertCount++;
+      }
+    }
+  }
+
+  // ====== 第五步：段落交换（12%概率，比之前略高）======
+  for (let i = 1; i < output.length - 1; i++) {
+    const curr = output[i];
+    const next = output[i + 1];
+    if (curr && next &&
+        !/^#{1,6}\s/.test(curr) && !/^#{1,6}\s/.test(next) &&
+        clen(curr) > 8 && clen(next) > 8 &&
+        clen(curr) < 60 && clen(next) < 60 && rng() < 0.12) {
+      output[i] = next;
+      output[i + 1] = curr;
+      i++;
+    }
+  }
+
+  // ====== 第六步：全文级扰动 ======
+  let finalText = output.join("\n\n");
+
+  // 标点变化（比之前更激进）
+  finalText = finalText.replace(/，/g, m => {
+    const r = rng();
+    if (r < 0.05) return "——";
+    if (r < 0.08) return "、";
+    return m;
+  });
+
+  // 省略主语 30%
+  finalText = finalText.replace(/^(他们|她们|我们|大家|人们|很多人|有些人|不少人)(都|也|就|还|又|才)?(会|能|要|想|在|把|被|让|给)?/gm,
+    (match, subj, adv, aux) => rng() < 0.30 ? ((adv || "") + (aux || "")) : match
+  );
+
+  // 的地得混用（人类常犯错）
+  let deCount = 0;
+  finalText = finalText.replace(/地(?=[\u4e00-\u9fa5])/g, m => {
+    if (deCount < 4 && rng() < 0.2) { deCount++; return "的"; }
+    return m;
+  });
+  let deCount2 = 0;
+  finalText = finalText.replace(/得(?=[很挺特真])/g, m => {
+    if (deCount2 < 2 && rng() < 0.15) { deCount2++; return "的"; }
+    return m;
+  });
+
+  // 删除部分句末的语气强化（AI喜欢每句都加"了""呢""吧"）
+  finalText = finalText.replace(/了。/g, m => rng() < 0.15 ? "。" : m);
+
+  // ====== 第七步：去掉markdown标题符号（让文章像口语讲述而不是文章）======
+  finalText = finalText.replace(/^#{1,6}\s+/gm, "");
+
+  // ====== 第八步：尾部加读者互动问句（真实社交媒体写作特征）======
+  const READER_QUESTIONS = [
+    "\n\n你们身边有这种人吗？",
+    "\n\n你们觉得呢？",
+    "\n\n有同感的扣个1。",
+    "\n\n你们怎么看？评论区说说。",
+    "\n\n不知道你们是不是也这样。",
+  ];
+  if (rng() < 0.6) {
+    finalText = finalText.trimEnd() + pick(READER_QUESTIONS);
+  }
+
+  return finalText.replace(/\n{4,}/g, "\n\n\n").trim();
+}
+
+
 export async function generateArticleContent(payload, userId = null) {
   const config = await getGenerationConfig(payload, userId);
   const requestUrl = `${config.baseUrl.replace(/\/$/, "")}/responses`;
@@ -470,7 +780,7 @@ export async function generateArticleContent(payload, userId = null) {
     throw new Error(GEMINI_MODEL_ERROR_CODE);
   }
 
-  const articleMd = extractArticleMarkdown(data);
+  const articleMd = deAIStatisticalFingerprint(extractArticleMarkdown(data));
   if (!articleMd) {
     throw new Error("ARTICLE_EMPTY");
   }
