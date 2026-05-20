@@ -536,18 +536,9 @@ function deAIStatisticalFingerprint(markdown) {
     let s = sent;
     const ops = []; // 收集可执行的操作，随机执行1-3个
 
-    // a) 截断加省略号
-    if (clen(s) > 20) ops.push(() => {
-      const commas = [];
-      for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
-      if (commas.length >= 2) {
-        const cut = commas[Math.floor(commas.length * 0.6)];
-        s = s.substring(0, cut) + "……";
-      }
-    });
-    // b) 句末加反问
+    // a) 句末加反问
     if (clen(s) > 10) ops.push(() => {
-      s = s.replace(/[。]$/, "") + pick(["，是吧？", "，对吧？", "，你说呢？", "——谁知道呢。"]);
+      s = s.replace(/[。]$/, "") + pick(["，是吧？", "，对吧？", "，你说呢？"]);
     });
     // c) 句首加语气词
     ops.push(() => {
@@ -555,28 +546,18 @@ function deAIStatisticalFingerprint(markdown) {
     });
     // d) 的/得混用
     ops.push(() => { s = s.replace(/得([很挺特真])/, "的$1"); });
-    // e) 句号改感叹/破折号/省略号
-    ops.push(() => { s = s.replace(/。$/, pick(["！", "——", "……", "。"])); });
-    // f) 句内犹豫/修正
+    // d) 句号改感叹号（不用省略号和破折号）
+    ops.push(() => { s = s.replace(/。$/, pick(["。", "。", "。", "！"])); });
+    // f) 句内犹豫/修正（用逗号不用破折号）
     if (clen(s) > 25) ops.push(() => {
       const commas = [];
       for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
       if (commas.length > 0) {
         const pos = commas[0];
-        s = s.substring(0, pos) + pick(["——不对，", "——等等，", "——算了，"]) + s.substring(pos + 1);
+        s = s.substring(0, pos) + pick(["，不对，", "，等等，", "，算了，"]) + s.substring(pos + 1);
       }
     });
-    // g) 加括号旁白
-    if (clen(s) > 15) ops.push(() => {
-      const commas = [];
-      for (let k = 0; k < s.length; k++) if (s[k] === '，') commas.push(k);
-      if (commas.length > 0) {
-        const pos = commas[Math.floor(rng() * commas.length)];
-        const aside = pick(["（真的）", "（没骗你）", "（我猜的）", "（大概吧）", "（别问我怎么知道的）"]);
-        s = s.substring(0, pos) + aside + s.substring(pos);
-      }
-    });
-    // h) 把"不"变成"又不是""也不"
+    // g) 把"不"变成"又不是""也不"
     ops.push(() => {
       s = s.replace(/不([是会能想要])/, (m, c) => rng() < 0.5 ? "又不" + c : "也不" + c);
     });
@@ -626,121 +607,94 @@ function deAIStatisticalFingerprint(markdown) {
       const sent = sentences[j].trim();
       if (!sent) continue;
 
-      // ★ 核心：55%概率重度改写
-      const shouldHeavyRewrite = rng() < 0.55;
-
       // 8%概率删除句子
       if (j > 0 && j < sentences.length - 1 && clen(sent) > 10 && clen(sent) < 35 && rng() < 0.08) {
         continue;
       }
 
-      if (shouldHeavyRewrite && clen(sent) > 8) {
+      // 55%概率重度改写
+      if (rng() < 0.55 && clen(sent) > 8) {
         rebuilt.push(heavyRewrite(sent));
       } else {
-        // 不改写的句子也可能做轻微结构调整
-        const len = clen(sent);
-        if (len > 40 && rng() < 0.6) {
-          // 长句拆分
-          const commas = [];
-          for (let k = 0; k < sent.length; k++) if (sent[k] === '，') commas.push(k);
-          if (commas.length >= 2) {
-            const mid = commas[Math.floor(commas.length / 2)];
-            rebuilt.push(sent.substring(0, mid) + '。');
-            rebuilt.push(sent.substring(mid + 1).trim());
-            continue;
-          }
-        }
         rebuilt.push(sent);
       }
     }
 
-    // 分段：2-4句一段
-    const chunked = [];
-    let chunk = [];
-    let target = 2 + Math.floor(rng() * 3);
     for (const s of rebuilt) {
-      chunk.push(s);
-      if (chunk.length >= target) {
-        chunked.push(chunk.join(""));
-        chunk = [];
-        target = 2 + Math.floor(rng() * 3);
-      }
-    }
-    if (chunk.length > 0) chunked.push(chunk.join(""));
-
-    for (const c of chunked) {
-      output.push(c);
-
-      // 插入人类碎片（28%概率）
-      if (insertCount < maxInserts && pi > 0 && pi < paragraphs.length - 1 && rng() < 0.28) {
-        output.push(pickU(HUMAN_INSERTS));
-        insertCount++;
-      }
+      output.push(s);
     }
   }
 
-  // ====== 第五步：段落交换（12%概率，比之前略高）======
-  for (let i = 1; i < output.length - 1; i++) {
-    const curr = output[i];
-    const next = output[i + 1];
-    if (curr && next &&
-        !/^#{1,6}\s/.test(curr) && !/^#{1,6}\s/.test(next) &&
-        clen(curr) > 8 && clen(next) > 8 &&
-        clen(curr) < 60 && clen(next) < 60 && rng() < 0.12) {
-      output[i] = next;
-      output[i + 1] = curr;
-      i++;
-    }
-  }
+  // ====== 第五步：合并为一整块文字（不分段！）======
+  // 人类自媒体文章就是一大坨文字，分段是AI特征
+  let finalText = output.join("");
 
-  // ====== 第六步：全文级扰动 ======
-  let finalText = output.join("\n\n");
+  // 破折号→逗号
+  finalText = finalText.replace(/——/g, m => rng() < 0.85 ? "，" : m);
 
-  // 标点变化（比之前更激进）
-  finalText = finalText.replace(/，/g, m => {
-    const r = rng();
-    if (r < 0.05) return "——";
-    if (r < 0.08) return "、";
-    return m;
-  });
+  // 省略号→逗号
+  finalText = finalText.replace(/……/g, "，");
 
-  // 省略主语 30%
-  finalText = finalText.replace(/^(他们|她们|我们|大家|人们|很多人|有些人|不少人)(都|也|就|还|又|才)?(会|能|要|想|在|把|被|让|给)?/gm,
-    (match, subj, adv, aux) => rng() < 0.30 ? ((adv || "") + (aux || "")) : match
+  // 省略主语 20%
+  finalText = finalText.replace(/(他们|她们|我们|大家|人们|很多人|有些人|不少人)(都|也|就|还|又|才)?(会|能|要|想|在|把|被|让|给)?/g,
+    (match, subj, adv, aux) => rng() < 0.20 ? ((adv || "") + (aux || "")) : match
   );
 
-  // 的地得混用（人类常犯错）
+  // 的地得混用
   let deCount = 0;
   finalText = finalText.replace(/地(?=[\u4e00-\u9fa5])/g, m => {
-    if (deCount < 4 && rng() < 0.2) { deCount++; return "的"; }
-    return m;
-  });
-  let deCount2 = 0;
-  finalText = finalText.replace(/得(?=[很挺特真])/g, m => {
-    if (deCount2 < 2 && rng() < 0.15) { deCount2++; return "的"; }
+    if (deCount < 3 && rng() < 0.15) { deCount++; return "的"; }
     return m;
   });
 
-  // 删除部分句末的语气强化（AI喜欢每句都加"了""呢""吧"）
-  finalText = finalText.replace(/了。/g, m => rng() < 0.15 ? "。" : m);
-
-  // ====== 第七步：去掉markdown标题符号（让文章像口语讲述而不是文章）======
-  finalText = finalText.replace(/^#{1,6}\s+/gm, "");
-
-  // ====== 第八步：尾部加读者互动问句（真实社交媒体写作特征）======
-  const READER_QUESTIONS = [
-    "\n\n你们身边有这种人吗？",
-    "\n\n你们觉得呢？",
-    "\n\n有同感的扣个1。",
-    "\n\n你们怎么看？评论区说说。",
-    "\n\n不知道你们是不是也这样。",
-  ];
-  if (rng() < 0.6) {
-    finalText = finalText.trimEnd() + pick(READER_QUESTIONS);
+  // ====== 关键：整篇文章只保留少量句号 ======
+  // 大约每150-250个字符保留一个句号，其余改逗号
+  const allPeriods = [];
+  for (let i = 0; i < finalText.length; i++) {
+    if (finalText[i] === '。') allPeriods.push(i);
   }
 
-  return finalText.replace(/\n{4,}/g, "\n\n\n").trim();
+  if (allPeriods.length > 1) {
+    // 决定哪些句号保留：大约每150-250字保留一个
+    const keep = new Set();
+    let lastKept = -200;
+    for (let i = 0; i < allPeriods.length; i++) {
+      const pos = allPeriods[i];
+      const dist = pos - lastKept;
+      // 最后一个句号必须保留
+      if (i === allPeriods.length - 1) {
+        keep.add(pos);
+      } else if (dist >= 150 + Math.floor(rng() * 100)) {
+        keep.add(pos);
+        lastKept = pos;
+      }
+    }
+
+    let result = '';
+    for (let i = 0; i < finalText.length; i++) {
+      if (finalText[i] === '。' && !keep.has(i)) {
+        result += '，';
+      } else {
+        result += finalText[i];
+      }
+    }
+    finalText = result;
+  }
+
+  // 去掉markdown标题符号
+  finalText = finalText.replace(/#{1,6}\s+/g, "");
+
+  // 添加结束语
+  const CLOSINGS = [
+    "以上文章属于个人观点，若另有见解，我们评论区见。",
+    "以上只是个人看法，有不同意见的欢迎评论区聊聊。",
+    "以上纯属个人观点，不喜勿喷，觉得说得对的点个赞。",
+  ];
+  finalText = finalText.trimEnd() + pick(CLOSINGS);
+
+  return finalText.trim();
 }
+
 
 
 export async function generateArticleContent(payload, userId = null) {
