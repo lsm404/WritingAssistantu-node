@@ -1,5 +1,11 @@
 import { getUserModelConfig } from "./auth-service.js";
 import { getImageGenerationSettings, getTextGenerationSettings } from "./system-settings-service.js";
+import {
+  AIGC_DOWN_SKILL_NAME,
+  AIGC_DOWN_SKILL_VERSION,
+  buildAigcDownRequestBody,
+} from "./aigc-down-skill.js";
+import { applyAigcLexiconReplacements } from "./aigc-lexicon.js";
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
@@ -20,7 +26,7 @@ const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个写公众号的人，文�
 
 写作核心规则：
 
-1. 全文至少5处用不常见的口语化说法替代标准书面语（每个说法只能出现一次，不准重复）。参考替换池："很多人"可以换成"大半""不少""一抓一大把"（挑一个用，下次换另一个）；"很难"换成"费老劲""不容易""够呛""悬"；"开始意识到"换成"琢磨过味儿来了""后来才反应过来""回过神来"；"非常重要"换成"差不了""少不了""马虎不得"。同一个词组全文只出现一次。
+1. 全文至少5处用不常见的口语化说法替代标准书面语（每个说法只能出现一次，不准重复）。
 
 2. 多用语气词和虚词来模拟口语节奏，比如"嘛""呗""啊""吧""哦""嘛""呢""也是""这个""反正""其实""就是说""要我说""说白了""当然了""说起来"。每隔几句就自然地加一个，不要刻意堆砌，但也不能一个都没有。
 
@@ -250,6 +256,16 @@ function getBooleanEnv(name, fallback = false) {
     return fallback;
   }
   return ["1", "true", "yes", "on"].includes(value);
+}
+
+function shouldAutoApplyAigcDown(payload) {
+  if (payload?.regenerate_for_de_ai) {
+    return false;
+  }
+  if (payload?.auto_aigc_down === false || payload?.auto_aigc_down === "false") {
+    return false;
+  }
+  return getBooleanEnv("AUTO_AIGC_DOWN_ENABLED", true);
 }
 
 /** 本地调试：打印发往 Ark 的参数（密钥仅打码，不落盘完整 key） */
@@ -597,6 +613,73 @@ function extractArticleMarkdown(data) {
   return articleMd.trim();
 }
 
+async function callTextGeneration(requestUrl, apiKey, requestBody) {
+  let response;
+  let data;
+  try {
+    response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+    data = await parseJsonResponse(response);
+  } catch {
+    throw new Error(GEMINI_MODEL_ERROR_CODE);
+  }
+
+  if (!response.ok) {
+    throw new Error(GEMINI_MODEL_ERROR_CODE);
+  }
+
+  return data;
+}
+
+async function applyAigcDownSkill(articleMd, payload, config) {
+  if (!shouldAutoApplyAigcDown(payload)) {
+    return {
+      articleMd,
+      applied: false,
+      model: "",
+    };
+  }
+
+  const requestUrl = `${config.baseUrl.replace(/\/$/, "")}/responses`;
+  const requestBody = buildAigcDownRequestBody(payload, config, articleMd, { automatic: true });
+
+  logOutgoingAiCall("text/aigc-down", {
+    url: requestUrl,
+    authorizationBearer: maskSecret(config.apiKey),
+    requestBody,
+    clientPayloadSummary: {
+      length: payload.length,
+      mode: payload.mode,
+      creation_mode: payload.creation_mode,
+      prompt_variant: resolvePromptVariant(payload),
+      skill: AIGC_DOWN_SKILL_NAME,
+      skill_version: AIGC_DOWN_SKILL_VERSION,
+    },
+  });
+
+  const data = await callTextGeneration(requestUrl, config.apiKey, requestBody);
+  const rewrittenMd = postprocessArticleMarkdown(extractArticleMarkdown(data), {
+    ...payload,
+    regenerate_for_de_ai: true,
+  });
+
+  if (!rewrittenMd) {
+    throw new Error("ARTICLE_EMPTY");
+  }
+
+  return {
+    articleMd: rewrittenMd,
+    applied: true,
+    model: data.model || config.model,
+  };
+}
+
 
 /**
  * 反AI检测后处理器 v10 —— 突发性策略
@@ -620,22 +703,8 @@ function deAIStatisticalFingerprint(markdown) {
 
   let text = markdown;
 
-  // ====== 第一步：删除AI指纹短语 ======
-  const NUKE = [
-    "值得一提的是，", "值得一提的是", "不难发现，", "不难发现",
-    "众所周知，", "众所周知", "综上所述，", "综上所述",
-    "由此可见，", "由此可见", "显而易见，", "显而易见",
-    "毫无疑问，", "毫无疑问", "毋庸置疑，", "毋庸置疑",
-    "首先，", "其次，", "最后，", "总之，",
-    "因此，", "此外，", "同时，", "事实上，",
-    "换言之，", "也就是说，", "一方面，", "另一方面，",
-    "归根结底，", "不可否认，", "换句话说，",
-    "在当今社会，", "随着社会的发展，", "从某种意义上说，",
-    "某种程度上，", "不言而喻，", "与此同时，",
-  ];
-  for (const p of NUKE) {
-    while (text.includes(p)) text = text.replace(p, "");
-  }
+  // ====== 第一步：删除/替换AI指纹词与同类平台高亮词 ======
+  text = applyAigcLexiconReplacements(text, { rng, pickUnique: pickU, probability: 0.9 });
 
   // ====== 第二步：句式模板替换（100+ 条）======
   // --- A. 时代/背景套话 ---
@@ -774,7 +843,7 @@ function deAIStatisticalFingerprint(markdown) {
   text = text.replace(/出乎意料(的是)?[，,]?(.{3,30})/g, (_, x, b) => "没想到，" + b);
   text = text.replace(/令人(惊讶|惊喜|意外|诧异)(的是)?[，,]?(.{3,30})/g, (_, x, y, c) => "没想到，" + c);
 
-  // ====== 第三步：词汇替换（保留，这部分有用）======
+  // ====== 第三步：词汇替换（旧规则保留，补充少量更口语的短词）======
   const S = [
     ["然而", ["可", "但", "不过", "话说回来"]],
     ["因此", ["所以", "那", "这么一来"]],
@@ -837,6 +906,9 @@ function deAIStatisticalFingerprint(markdown) {
       ).join("");
     }
   }
+
+  // 跑完句式规则后再扫一遍，处理新生成片段里的残留高频词。
+  text = applyAigcLexiconReplacements(text, { rng, pickUnique: pickU, probability: 0.74 });
 
   // ====== 第四步（核心）：选择性重度改写 → 制造burstiness ======
   const paragraphs = text.split(/\n\n+/);
@@ -969,31 +1041,15 @@ export async function generateArticleContent(payload, userId = null) {
     },
   });
 
-  let response;
-  let data;
-  try {
-    response = await fetch(requestUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
-    data = await parseJsonResponse(response);
-  } catch {
-    throw new Error(GEMINI_MODEL_ERROR_CODE);
-  }
-
-  if (!response.ok) {
-    throw new Error(GEMINI_MODEL_ERROR_CODE);
-  }
+  const data = await callTextGeneration(requestUrl, config.apiKey, requestBody);
 
   const promptVariant = resolvePromptVariant(payload);
-  const articleMd = postprocessArticleMarkdown(extractArticleMarkdown(data), payload);
-  if (!articleMd) {
+  const firstPassArticleMd = postprocessArticleMarkdown(extractArticleMarkdown(data), payload);
+  if (!firstPassArticleMd) {
     throw new Error("ARTICLE_EMPTY");
   }
+  const aigcDown = await applyAigcDownSkill(firstPassArticleMd, payload, config);
+  const articleMd = aigcDown.articleMd;
 
   return {
     ok: true,
@@ -1004,6 +1060,12 @@ export async function generateArticleContent(payload, userId = null) {
       mode: payload.mode || "standard",
       creation_mode: payload.creation_mode || "synthesized",
       prompt_variant: promptVariant,
+      aigc_down: {
+        applied: aigcDown.applied,
+        skill: AIGC_DOWN_SKILL_NAME,
+        version: AIGC_DOWN_SKILL_VERSION,
+        model: aigcDown.model || null,
+      },
     },
   };
 }
