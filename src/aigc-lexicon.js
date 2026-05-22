@@ -574,3 +574,137 @@ export function buildAigcReplacementInstruction(maxItems = 320) {
     .join("\n")
     .trim();
 }
+
+const TECHNICAL_DOC_REWRITE_RULES = `
+## 论文/技术文档稳定改写模式
+
+如果原文是论文、毕业设计、技术文档、接口文档、系统设计说明、代码说明或包含较多技术术语的文本，优先使用本模式，而不是公众号强口语模式。
+
+目标风格：在不改变技术含义、事实、逻辑关系、配置项、接口路径、类名、文件名和库名的前提下，把文字改得略微啰嗦一点、解释性强一点、表达更通俗一点，但仍然保持专业底线。
+
+硬性约束：
+- 修改后字数应与原文基本相符，不要明显长于原文。
+- 不要第一人称，不要写“我”“我们认为”这类表达。
+- 不要过度口语化，禁止使用“至于xxx呢”“xxx呢”这类句式。
+- 不要新增事实、案例、数据、接口、配置项、实现细节或外部背景。
+- 技术标识必须原样保留：如 Django、RESTful API、Ceph、RGW、S3、JWT、ORM、MySQL、Boto3、djangorestframework-simplejwt、views.py、settings.py、accounts.CustomUser、.folder_marker、CEPH_STORAGE、DATABASES、/accounts/api/token/refresh/ 等。
+- 输出只给修改后的正文。除非调用方明确要求，不要额外添加“原文”“修改后”等标签。
+
+核心改法：
+- 动词短语适度扩展：管理 -> 进行管理 / 开展管理工作；交互 -> 进行交互；配置 -> 进行配置；处理 -> 去处理相关工作；恢复 -> 进行恢复；实现 -> 得以实现 / 来实现。
+- 适当增加“了、的、地、所、会、可以、这个、方面、当中”等辅助词，但不要堆砌。
+- 词汇替换：采用/使用 -> 运用 / 选用 / 把...当作...来使用；基于 -> 鉴于 / 基于...来开展；利用 -> 借助 / 运用 / 凭借；通过 -> 借助 / 依靠 / 凭借；和/及/与 -> 以及；并 -> 并且 / 还 / 同时；原因 -> 缘由；符合 -> 契合；适合 -> 适宜；特点 -> 特性；极大地 -> 极大程度上；立即 -> 马上。
+- 括号整合：ORM（对象关系映射）可改为 ORM也就是对象关系映射；功能（如ORM、Admin）可改为 功能，比如ORM、Admin；视图 (views.py) 中可改为 视图也就是views.py中。
+- 条件句可轻微自然化：若...则... -> 如果...就...；不要改成过度口语的“要是...那就...”除非原文本身很口语。
+`.trim();
+
+const TECHNICAL_DOC_WORD_REPLACEMENTS = [
+  ["采用", ["运用", "选用"]],
+  ["使用", ["运用", "选用"]],
+  ["利用", ["借助", "运用", "凭借"]],
+  ["通过", ["借助", "依靠", "凭借"]],
+  ["符合", ["契合"]],
+  ["适合", ["适宜"]],
+  ["特点", ["特性"]],
+  ["原因", ["缘由"]],
+  ["立即", ["马上"]],
+  ["极大地", ["极大程度上"]],
+  ["极大", ["极大程度上"]],
+  ["提供功能", ["拥有功能", "有功能"]],
+];
+
+const TECHNICAL_DOC_PATTERN_REPLACEMENTS = [
+  {
+    pattern: /([\u4e00-\u9fa5A-Za-z0-9_.\-/]+)\s*[和及与]\s*([\u4e00-\u9fa5A-Za-z0-9_.\-/]+)/g,
+    replace: (_match, left, right) => `${left}以及${right}`,
+  },
+  {
+    pattern: /管理([\u4e00-\u9fa5A-Za-z0-9_.\-/]{2,30})/g,
+    replace: (_match, target) => `对${target}开展管理工作`,
+  },
+  {
+    pattern: /交互([\u4e00-\u9fa5A-Za-z0-9_.\-/]{2,30})/g,
+    replace: (_match, target) => `与${target}进行交互`,
+  },
+  {
+    pattern: /配置\s*([\u4e00-\u9fa5A-Za-z0-9_.\-/]{2,40})/g,
+    replace: (_match, target) => `对${target}进行配置`,
+  },
+  {
+    pattern: /处理([\u4e00-\u9fa5A-Za-z0-9_.\-/]{2,30})/g,
+    replace: (_match, target) => `对${target}进行处理`,
+  },
+  {
+    pattern: /恢复([\u4e00-\u9fa5A-Za-z0-9_.\-/]{2,30})/g,
+    replace: (_match, target) => `对${target}进行恢复`,
+  },
+  {
+    pattern: /若(.{2,40})，?则(.{2,50})/g,
+    replace: (_match, condition, result) => `如果${condition}，就${result}`,
+  },
+  {
+    pattern: /为了将(.{2,30})解耦/g,
+    replace: (_match, target) => `为了实现${target}的解耦`,
+  },
+  {
+    pattern: /将(.{2,28})移动/g,
+    replace: (_match, target) => `把${target}移动`,
+  },
+  {
+    pattern: /实现(.{2,30})/g,
+    replace: (_match, target) => `来实现${target}`,
+  },
+  {
+    pattern: /([A-Za-z][A-Za-z0-9_.\-]{1,60})[（(]([\u4e00-\u9fa5][^（）()]{1,40})[）)]/g,
+    replace: (_match, code, desc) => `${code}也就是${desc}`,
+  },
+  {
+    pattern: /([\u4e00-\u9fa5]{2,16})\s*[（(]([A-Za-z0-9_./\-]{2,80})[）)]/g,
+    replace: (_match, label, code) => `${label}也就是${code}`,
+  },
+  {
+    pattern: /（如([^）]{1,60})）/g,
+    replace: (_match, examples) => `，比如${examples}`,
+  },
+  {
+    pattern: /\(如([^)]{1,60})\)/g,
+    replace: (_match, examples) => `，比如${examples}`,
+  },
+];
+
+function replaceTechnicalDocWords(text, rng) {
+  let output = text;
+  for (const [source, alternatives] of TECHNICAL_DOC_WORD_REPLACEMENTS) {
+    if (!output.includes(source)) continue;
+    output = output
+      .split(source)
+      .map((part, index, parts) => {
+        if (index === parts.length - 1) return part;
+        return part + (rng() < 0.72 ? pickFrom(alternatives, rng) : source);
+      })
+      .join("");
+  }
+  return output;
+}
+
+export function applyTechnicalDocStyleReplacements(value, options = {}) {
+  if (!value || typeof value !== "string") return value;
+  const rng = typeof options.rng === "function" ? options.rng : Math.random;
+  let text = value.trim();
+
+  for (const rule of TECHNICAL_DOC_PATTERN_REPLACEMENTS) {
+    text = text.replace(rule.pattern, rule.replace);
+  }
+
+  text = replaceTechnicalDocWords(text, rng);
+
+  return text
+    .replace(/，{2,}/g, "，")
+    .replace(/。{2,}/g, "。")
+    .replace(/\s+([，。；：])/g, "$1")
+    .trim();
+}
+
+export function buildTechnicalDocRewriteInstruction() {
+  return TECHNICAL_DOC_REWRITE_RULES;
+}

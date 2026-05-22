@@ -98,10 +98,10 @@ const ERROR_MESSAGE_MAP = {
   REGISTRATION_IP_LIMIT: "当前 IP 注册次数过多，请稍后再试",
   REGISTRATION_SUBNET_LIMIT: "当前网络注册次数过多，请稍后再试",
   REGISTRATION_DEVICE_LIMIT: "当前设备注册次数过多，请稍后再试",
-  INVALID_INVITE_CODE: "邀请码格式不正确",
-  INVITE_CODE_NOT_FOUND: "邀请码不存在",
-  AGENT_DISABLED: "该邀请码暂不可用",
-  INVITE_CODE_GENERATION_FAILED: "邀请码生成失败，请稍后再试",
+  INVALID_INVITE_CODE: "激活码格式不正确",
+  INVITE_CODE_NOT_FOUND: "激活码不存在",
+  AGENT_DISABLED: "该激活码暂不可用",
+  INVITE_CODE_GENERATION_FAILED: "激活码生成失败，请稍后再试",
   INVALID_AGENT_NAME: "代理名称不能为空",
   INVALID_AGENT_STATUS: "代理状态不正确",
   AGENT_RECORD_NOT_FOUND: "代理记录不存在",
@@ -173,17 +173,17 @@ const ERROR_MESSAGE_MAP = {
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
-  ".css":  "text/css; charset=utf-8",
-  ".js":   "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".png":  "image/png",
-  ".jpg":  "image/jpeg",
-  ".svg":  "image/svg+xml",
-  ".ico":  "image/x-icon",
-  ".woff2":"font/woff2",
-  ".zip":  "application/zip",
-  ".msi":  "application/x-msi",
-  ".exe":  "application/vnd.microsoft.portable-executable",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".zip": "application/zip",
+  ".msi": "application/x-msi",
+  ".exe": "application/vnd.microsoft.portable-executable",
 };
 
 function serveStatic(response, filePath) {
@@ -612,13 +612,13 @@ const server = http.createServer(async (request, response) => {
           message === "UNAUTHORIZED"
             ? 401
             : message === "TOPIC_REQUIRED" ||
-                message === "SOURCE_ARTICLE_REQUIRED" ||
-                message === "ARK_API_KEY_MISSING" ||
-                message === "ARK_MODEL_MISSING" ||
-                message === "TEXT_QUOTA_EXCEEDED" ||
-                message === "DE_AI_QUOTA_EXCEEDED"
-            ? 400
-            : 500;
+              message === "SOURCE_ARTICLE_REQUIRED" ||
+              message === "ARK_API_KEY_MISSING" ||
+              message === "ARK_MODEL_MISSING" ||
+              message === "TEXT_QUOTA_EXCEEDED" ||
+              message === "DE_AI_QUOTA_EXCEEDED"
+              ? 400
+              : 500;
         sendJson(response, statusCode, { error: message });
       }
       return;
@@ -658,11 +658,11 @@ const server = http.createServer(async (request, response) => {
           message === "UNAUTHORIZED"
             ? 401
             : message === "PROMPT_REQUIRED" ||
-                  message === "IMAGE_QUOTA_EXCEEDED" ||
-                  message === "ARK_IMAGE_API_KEY_MISSING" ||
-                  message === "ARK_IMAGE_MODEL_MISSING"
-                ? 400
-                : 500;
+              message === "IMAGE_QUOTA_EXCEEDED" ||
+              message === "ARK_IMAGE_API_KEY_MISSING" ||
+              message === "ARK_IMAGE_MODEL_MISSING"
+              ? 400
+              : 500;
         sendJson(response, statusCode, { error: message });
       }
       return;
@@ -714,10 +714,10 @@ const server = http.createServer(async (request, response) => {
         const message = error instanceof Error ? error.message : "WECHAT_DRAFT_FAILED";
         const statusCode =
           message === "TITLE_REQUIRED" ||
-          message === "CONTENT_REQUIRED" ||
-          message === "WECHAT_APPID_MISSING" ||
-          message === "WECHAT_APPSECRET_MISSING" ||
-          message === "WECHAT_THUMB_MEDIA_ID_MISSING"
+            message === "CONTENT_REQUIRED" ||
+            message === "WECHAT_APPID_MISSING" ||
+            message === "WECHAT_APPSECRET_MISSING" ||
+            message === "WECHAT_THUMB_MEDIA_ID_MISSING"
             ? 400
             : 500;
         sendJson(response, statusCode, { error: message });
@@ -747,10 +747,10 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 200, { config });
       } catch (error) {
         const message = error.message || "Internal server error";
-        const statusCode = 
+        const statusCode =
           message === "UNAUTHORIZED" ? 401 :
-          message === "NO_VALID_UPDATES" ? 400 :
-          500;
+            message === "NO_VALID_UPDATES" ? 400 :
+              500;
         sendJson(response, statusCode, { error: message });
       }
       return;
@@ -839,11 +839,11 @@ const server = http.createServer(async (request, response) => {
       try {
         const auth = await requireUser(getAuthToken(request));
         const body = await readJsonBody(request);
-        
+
         // 限制公众号绑定数量
         const membership = await getMembershipSummary(auth.user.id);
         const accountCount = Array.isArray(body?.accounts) ? body.accounts.length : 0;
-        
+
         let limit = 1; // 默认（免费或过期） 1 个
         if (membership?.isActive && membership?.plan) {
           limit = membership.plan.wechatAccountLimit ?? 1;
@@ -862,11 +862,11 @@ const server = http.createServer(async (request, response) => {
           message === "UNAUTHORIZED"
             ? 401
             : message === "INVALID_BODY" ||
-                message === "ACCOUNTS_REQUIRED" ||
-                message === "ACCOUNT_NAME_AND_ID_REQUIRED" ||
-                message === "APP_SECRET_PLAINTEXT_FORBIDDEN" ||
-                message === "APP_SECRET_CIPHER_INVALID" ||
-                message === "APP_SECRET_BASE64_INVALID"
+              message === "ACCOUNTS_REQUIRED" ||
+              message === "ACCOUNT_NAME_AND_ID_REQUIRED" ||
+              message === "APP_SECRET_PLAINTEXT_FORBIDDEN" ||
+              message === "APP_SECRET_CIPHER_INVALID" ||
+              message === "APP_SECRET_BASE64_INVALID"
               ? 400
               : message === "APP_SECRET_DECRYPT_FAILED"
                 ? 400
@@ -961,13 +961,13 @@ const server = http.createServer(async (request, response) => {
           message === "REGISTRATION_DEVICE_LIMIT";
         const statusCode =
           message === "EMAIL_ALREADY_EXISTS" ||
-          message === "INVALID_EMAIL" ||
-          message === "PASSWORD_TOO_SHORT" ||
-          message === "INVALID_DISPLAY_NAME" ||
-          message === "INVALID_INVITE_CODE" ||
-          message === "INVITE_CODE_NOT_FOUND" ||
-          message === "AGENT_DISABLED" ||
-          message === "REGISTRATION_IP_REQUIRED"
+            message === "INVALID_EMAIL" ||
+            message === "PASSWORD_TOO_SHORT" ||
+            message === "INVALID_DISPLAY_NAME" ||
+            message === "INVALID_INVITE_CODE" ||
+            message === "INVITE_CODE_NOT_FOUND" ||
+            message === "AGENT_DISABLED" ||
+            message === "REGISTRATION_IP_REQUIRED"
             ? 400
             : tooMany
               ? 429
@@ -1372,9 +1372,9 @@ const server = http.createServer(async (request, response) => {
             message === "UNAUTHORIZED"
               ? 401
               : message === "FORBIDDEN" ||
-                  message === "AGENT_RECORD_NOT_FOUND" ||
-                  message === "AGENT_DISABLED" ||
-                  message === "AGENT_GRANT_MEMBERSHIP_DISABLED"
+                message === "AGENT_RECORD_NOT_FOUND" ||
+                message === "AGENT_DISABLED" ||
+                message === "AGENT_GRANT_MEMBERSHIP_DISABLED"
                 ? 403
                 : message === "PLAN_NOT_FOUND"
                   ? 400
@@ -1549,10 +1549,10 @@ const server = http.createServer(async (request, response) => {
         await requireSuperAdmin(getAuthToken(request));
         const body = await readJsonBody(request);
         console.log("[server.js] DEBUG - Parsed Body:", body);
-        
-        const agent = await createAgent({ 
-          name: body.name, 
-          email: body.email, 
+
+        const agent = await createAgent({
+          name: body.name,
+          email: body.email,
           password: body.password,
           contactWechat: body.contactWechat,
           canGrantMembership: body.canGrantMembership,
@@ -1706,7 +1706,7 @@ const server = http.createServer(async (request, response) => {
       try {
         const auth = await requireUser(getAuthToken(request));
         const agent = await getAgentByUserId(auth.user.id);
-        
+
         if (!agent) {
           sendJson(response, 403, { error: "NOT_AN_AGENT" });
           return;

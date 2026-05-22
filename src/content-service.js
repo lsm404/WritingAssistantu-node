@@ -5,7 +5,10 @@ import {
   AIGC_DOWN_SKILL_VERSION,
   buildAigcDownRequestBody,
 } from "./aigc-down-skill.js";
-import { applyAigcLexiconReplacements } from "./aigc-lexicon.js";
+import {
+  applyAigcLexiconReplacements,
+  applyTechnicalDocStyleReplacements,
+} from "./aigc-lexicon.js";
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
@@ -22,13 +25,13 @@ const LEGACY_GENERIC_PROMPT_MARKERS = [
   "## 3. 增加“作者存在感”",
   "你是一个真实公众号作者",
 ];
-const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个写公众号的人，文化水平一般，说话比较啰嗦，不追求精炼。根据用户的主题写一篇微信公众号文章。
+const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个中文内容生成和改写助手。默认任务是根据用户主题写一篇微信公众号文章，但这是一套通用模板，所有题材都统一采用“自然、略啰嗦、解释性更强、但不明显扩写”的写法。内容可以更通俗，但不能过度口语化；如果涉及论文、毕业设计、技术文档、接口文档、系统设计说明或代码说明，也要把这些约束融合进同一套写法里，而不是另起一种风格。
 
-写作核心规则：
+普通公众号写作核心规则：
 
 1. 全文至少5处用不常见的口语化说法替代标准书面语（每个说法只能出现一次，不准重复）。
 
-2. 多用语气词和虚词来模拟口语节奏，比如"嘛""呗""啊""吧""哦""嘛""呢""也是""这个""反正""其实""就是说""要我说""说白了""当然了""说起来"。每隔几句就自然地加一个，不要刻意堆砌，但也不能一个都没有。
+2. 可以使用少量虚词来模拟自然节奏，比如"也是""这个""反正""其实""就是说""说白了""当然了""说起来"。不要刻意堆砌语气词，尤其不要出现“至于xxx呢”“xxx呢”这类句式。
 
 3. 句子长度要自然变化。可以连续写两三个中等句子再来一个特别短的，也可以连续几个短句后来一个长的。不要机械地长-短-长-短交替。
 
@@ -42,9 +45,13 @@ const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个写公众号的人，文�
 
 8. 结尾不要升华不要喊口号。说完就停。
 
-9. 绝对禁止使用任何特殊符号，包括：引号（""''「」『』""''）、省略号（……）、破折号（——）、书名号（《》〈〉）、分隔线（---或***）、任何箭头或特殊标点。全文只允许出现中文逗号（，）和中文句号（。），段落内部只能使用中文逗号，只有段落结尾才能使用中文句号。
+9. 标点尽量克制，以中文逗号和中文句号为主，不要滥用引号、省略号、破折号、书名号、分隔线、箭头等特殊标点。涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要的括号、斜杠、点号、冒号、反引号等必须保留。
 
-10. 可以自然分段。每个段落内部以逗号连接，段尾用句号结束。段落之间直接换行，不要加连接词。
+10. 可以自然分段。段落内部尽量用中文逗号连接，段尾用句号结束。不要为了形式统一而破坏技术标识或原有结构。
+
+11. 融合论文和技术文档的稳定改写规则：保持核心技术信息、事实、逻辑关系和专业术语不变。修改后字数要与原文基本相符，不要明显长于原文。不要第一人称。技术术语、代码片段、库名、配置项、接口路径、文件名、类名必须原样保留。可把“采用/使用”改为“运用/选用”，“利用/通过”改为“借助/依靠/凭借”，“和/及/与”改为“以及”，“符合”改为“契合”，“适合”改为“适宜”，“特点”改为“特性”，“原因”改为“缘由”；可把“配置、处理、恢复、管理、交互、实现”等动词短语适度扩展为“进行配置、进行处理、进行恢复、开展管理工作、进行交互、得以实现”。括号里的解释可自然融入句子，比如 ORM（对象关系映射）改为 ORM也就是对象关系映射。
+
+12. 整体表达要稍微更饱满，但不能为了显得人工而扩写太多。优先做轻量替换、短语扩展、括号整合和句式微调，不要新增事实、案例、数据、接口、配置项、实现细节或外部背景。
 
 只输出 Markdown 成稿，不要输出标题（不要用 # 号）。`;
 const CLASSIC_GENERIC_SYSTEM_PROMPT = `# Role
@@ -77,21 +84,21 @@ const CLASSIC_GENERIC_SYSTEM_PROMPT = `# Role
 
 只输出最终 Markdown 成稿，不要解释写作思路，不要给多个版本，不要输出任何正文之外的内容。`;
 const DE_AI_TONE_INSTRUCTION =
-  "用词要接地气，土一点没关系。少用书面语，多用口头语。说话要啰嗦，多用语气词（嘛、呗、啊、吧、呢、反正、说白了、要我说等）。禁止使用任何引号、省略号、破折号、书名号等特殊符号，全文只允许中文逗号和中文句号。可以自然分段，段落内部只能用逗号连接，只在段落结尾用句号。";
+  "用词要自然通俗，略微啰嗦一点，多做轻量解释，但不要明显扩写。不要过度口语化，不要出现“至于xxx呢”“xxx呢”这类句式。标点以中文逗号和句号为主，涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要符号必须保留。";
 const CLASSIC_DE_AI_TONE_INSTRUCTION =
   "我希望文本略有点生涩和稚嫩，用那种中文并不是很精通的人的语气撰写这个文本，稍微学术一点，态度端正一点，更多体现在语言上的大白话";
 const STRICT_ARTICLE_LENGTH_DESCRIPTION = `严格控制在 ${ARTICLE_MIN_CHARS}-${ARTICLE_MAX_CHARS} 字，正文不要低于 ${ARTICLE_MIN_CHARS} 字，也不要超过 ${ARTICLE_MAX_CHARS} 字。`;
 const BASIC_ARTICLE_FORMAT_INSTRUCTION = [
   `全文字数必须在 ${ARTICLE_MIN_CHARS}-${ARTICLE_MAX_CHARS} 字之间。`,
-  "允许自然分段，段内只能使用中文逗号作为停顿标点。",
-  "每一段只有段尾可以出现一个中文句号，段内不能出现句号、问号、感叹号、分号、冒号、省略号、破折号或其他标点。",
+  "允许自然分段，段内优先使用中文逗号作为停顿标点。",
+  "每一段段尾尽量使用中文句号。不要滥用问号、感叹号、分号、冒号、省略号、破折号等标点；但涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要符号必须原样保留。",
   "不要输出标题符号、列表符号或解释说明，只输出成稿正文。",
 ].join("\n");
 const ARTICLE_FORMAT_INSTRUCTION = [
   BASIC_ARTICLE_FORMAT_INSTRUCTION,
-  "补充大量得的、了、来着、那个、也就、吧之类的口语虚词",
+  "可以适当补充“的、了、所、会、可以、这个、方面、当中”等辅助词，让文字更饱满；不要大量堆砌口语虚词。",
 ].join("\n");
-const AI_RULE_INSTRUCTIONS_MAX_CHARS = 5000;
+const AI_RULE_INSTRUCTIONS_MAX_CHARS = 8000;
 const AI_RULE_TRUNCATION_MARKER = "…[已按平台规则截断]";
 const ARTICLE_FORBIDDEN_INNER_PUNCTUATION = /[。！？!?；;：:、—–-]|…+|\.{2,}/g;
 const REWRITE_GOAL_LABELS = {
@@ -111,6 +118,8 @@ const REFERENCE_LEVEL_LABELS = {
   medium: "中参考",
   high: "强参考",
 };
+const TECHNICAL_DOC_SIGNAL_PATTERN =
+  /\b(?:Django|RESTful|API|Ceph|RGW|S3|JWT|ORM|MySQL|Boto3|djangorestframework-simplejwt|Vue|React|Node|Express|Prisma|Redis|Docker|Kubernetes|Nginx|views\.py|settings\.py|accounts\.CustomUser|CEPH_STORAGE|DATABASES)\b|\/[A-Za-z0-9_./:-]+\/|[A-Za-z0-9_.-]+\.(?:py|js|ts|tsx|json|yaml|yml|sql|md)\b/u;
 const EXPRESSION_REQUIREMENTS = {
   standard: "通俗易懂，大白话，不装文化人。",
   conversational: "就像咱们现在面对面聊天一样，极度口语化，多用短促的句子。",
@@ -134,7 +143,6 @@ const MODE_DESCRIPTIONS = {
   listicle: "清单型内容，条理清晰。",
   analysis: "分析型文章，强调背景、问题和判断。",
 };
-
 
 const tokenCache = {
   token: "",
@@ -327,7 +335,7 @@ function buildSystemPrompt(payload) {
     promptVariant === PROMPT_VARIANTS.CLASSIC ? CLASSIC_DE_AI_TONE_INSTRUCTION : DE_AI_TONE_INSTRUCTION;
   const requiredRules = [
     text.includes(toneInstruction) ? "" : toneInstruction,
-    formatInstruction && !text.includes("段内只能使用中文逗号") ? formatInstruction : "",
+    formatInstruction && !text.includes("段内优先使用中文逗号") ? formatInstruction : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -354,6 +362,20 @@ function buildModeDescription(mode) {
 
 function buildExpressionRequirement(expressionMode) {
   return EXPRESSION_REQUIREMENTS[expressionMode] || EXPRESSION_REQUIREMENTS.standard;
+}
+
+function looksLikeTechnicalDoc(markdown) {
+  const value = String(markdown || "");
+  if (!value.trim()) return false;
+  if (TECHNICAL_DOC_SIGNAL_PATTERN.test(value)) return true;
+
+  const signals = [
+    "接口", "权限", "认证", "数据库", "配置", "视图", "模型", "序列化", "中间件",
+    "对象存储", "路由", "请求", "响应", "令牌", "依赖", "部署", "模块", "函数",
+    "组件", "服务端", "客户端", "字段", "参数", "返回值", "异常", "实例",
+  ];
+  const hitCount = signals.reduce((count, signal) => count + (value.includes(signal) ? 1 : 0), 0);
+  return hitCount >= 4;
 }
 
 function buildLifeSliceStyleInstruction() {
@@ -1016,9 +1038,12 @@ function classicArticlePostprocess(markdown) {
 }
 
 function postprocessArticleMarkdown(markdown, payload) {
+  const technicalAdjustedMarkdown = looksLikeTechnicalDoc(markdown)
+    ? applyTechnicalDocStyleReplacements(markdown)
+    : markdown;
   return resolvePromptVariant(payload) === PROMPT_VARIANTS.CLASSIC
-    ? classicArticlePostprocess(markdown)
-    : deAIStatisticalFingerprint(markdown);
+    ? classicArticlePostprocess(technicalAdjustedMarkdown)
+    : deAIStatisticalFingerprint(technicalAdjustedMarkdown);
 }
 
 

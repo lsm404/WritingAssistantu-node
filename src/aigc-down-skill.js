@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildAigcReplacementInstruction } from "./aigc-lexicon.js";
+import { buildAigcReplacementInstruction, buildTechnicalDocRewriteInstruction } from "./aigc-lexicon.js";
 
 export const AIGC_DOWN_SKILL_NAME = "aigc-down-skill";
 export const AIGC_DOWN_SKILL_VERSION = 1;
@@ -51,6 +51,8 @@ function readBundledSkill() {
 function getAigcDownInstructions() {
   return [
     readBundledSkill(),
+    "",
+    buildTechnicalDocRewriteInstruction(),
     "",
     buildAigcReplacementInstruction(),
     "",
