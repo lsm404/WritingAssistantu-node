@@ -604,7 +604,6 @@ function getWechatConfig(payload) {
   };
 }
 
-
 function buildArkRequestBody(payload, config) {
   const systemText = buildSystemPrompt(payload);
   const userText = buildUserPrompt(payload);
@@ -905,166 +904,251 @@ function deAIStatisticalFingerprint(markdown) {
   const rng = () => Math.random();
   const pick = (arr) => arr[Math.floor(rng() * arr.length)];
   const clen = countArticleCharacters;
+  const SENTINEL = '\u200B';
 
-  const used = new Set();
-  const pickU = (arr) => {
-    const a = arr.filter(x => !used.has(x));
-    if (!a.length) return pick(arr);
-    const c = pick(a); used.add(c); return c;
-  };
+  // 每组规则独立的去重选择器，避免跨规则候选词污染
+  function makeScopedPickU() {
+    const used = new Set();
+    return (arr) => {
+      const a = arr.filter(x => !used.has(x));
+      if (!a.length) { used.clear(); return pick(arr); }
+      const c = pick(a); used.add(c); return c;
+    };
+  }
 
   let text = markdown;
 
   // ====== 第一步：删除/替换AI指纹词与同类平台高亮词 ======
-  text = applyAigcLexiconReplacements(text, { rng, pickUnique: pickU, probability: 0.9 });
+  text = applyAigcLexiconReplacements(text, { rng, pickUnique: makeScopedPickU(), probability: 0.9 });
 
   // ====== 第二步：句式模板替换（100+ 条）======
   // --- A. 时代/背景套话 ---
-  text = text.replace(/越来越多的人(开始)?/g, () => pickU(["不少人", "好多人", "一些人", "很多人", "身边不少人"]));
-  text = text.replace(/在这个(.{2,15})的时代[，,]?/g, () => pickU(["现在这年头，", "这几年，", "现在嘛，", "如今，"]));
-  text = text.replace(/随着(.{2,15})的(发展|变化|推进|深入|普及)[，,]?/g, (_, a) => a + "这几年变化挺大的，");
-  text = text.replace(/在(当今|现代|当代|如今)社会[，,]?/g, () => pickU(["现在这社会，", "现在嘛，", "这年头，"]));
-  text = text.replace(/时代的(洪流|浪潮|车轮)[，,]?/g, () => "大势所趋，");
-  text = text.replace(/顺应时代(潮流|发展|趋势)[，,]?/g, () => "跟上时代，");
-  text = text.replace(/新时代(背景下|的今天|里)[，,]?/g, () => "现在这会儿，");
-  text = text.replace(/在(历史|时代|社会)的(长河|进程|发展)中[，,]?/g, () => "这些年来，");
+  let pickU = makeScopedPickU();
+  text = text.replace(/越来越多的人(开始)?/gu, () => SENTINEL + pickU(["不少人", "好多人", "一些人", "很多人", "身边不少人"]));
+  text = text.replace(/在这个(.{2,15})的时代[，,]?/gu, () => SENTINEL + pickU(["现在这年头，", "这几年，", "现在嘛，", "如今，"]));
+  text = text.replace(/随着(.{2,15})的(发展|变化|推进|深入|普及)[，,]?/gu, (_, a) => SENTINEL + a + "这几年变化挺大的，");
+  text = text.replace(/在(当今|现代|当代|如今)社会[，,]?/gu, () => SENTINEL + pickU(["现在这社会，", "现在嘛，", "这年头，"]));
+  text = text.replace(/时代的(洪流|浪潮|车轮)[，,]?/gu, () => SENTINEL + "大势所趋，");
+  text = text.replace(/顺应时代(潮流|发展|趋势)[，,]?/gu, () => SENTINEL + "跟上时代，");
+  text = text.replace(/新时代(背景下|的今天|里)[，,]?/gu, () => SENTINEL + "现在这会儿，");
+  text = text.replace(/在(历史|时代|社会)的(长河|进程|发展)中[，,]?/gu, () => SENTINEL + "这些年来，");
+
   // --- B. 说教/升华句 ---
-  text = text.replace(/让我们(共同|一起)?(努力|奋斗|前行|加油|成长)/g, () => pickU(["大家一块儿加油吧", "一起努力就行了", "反正一起扛呗", "各自加把劲吧"]));
-  text = text.replace(/我们(都)?需要(认真)?(思考|反思|面对|正视|审视)/g, () => pickU(["值得好好想想", "真得琢磨琢磨", "得认真对待这事", "这个不能不想"]));
-  text = text.replace(/这(一点|件事|个问题)值得我们(深思|重视|关注|思考)/g, () => pickU(["这个挺值得琢磨的", "这事真得好好想想", "这个问题其实挺重要的"]));
-  text = text.replace(/每个人(都)?(应该|需要|必须)(去)?(面对|思考|承担|重视)/g, () => pickU(["这事谁都躲不开", "每个人都得面对这个", "谁都一样，跑不掉"]));
-  text = text.replace(/只有这样[，,]?才能(.{2,20})/g, (_, a) => "这么做了，才有可能" + a);
-  text = text.replace(/唯有(.{2,15})[，,]?才能(.{2,20})/g, (_, a, b) => "只有" + a + "，才可能" + b);
-  text = text.replace(/活出(真正的|属于自己的)?人生(意义|价值|精彩)/g, () => pickU(["活得像自己", "活出点样来", "好好过自己的日子"]));
-  text = text.replace(/成为(更好的|更优秀的)?自己/g, () => pickU(["让自己好一点", "往好了走", "自己进步"]));
+  pickU = makeScopedPickU();
+  text = text.replace(/让我们(共同|一起)?(努力|奋斗|前行|加油|成长)/gu, () => SENTINEL + pickU(["大家一块儿加油吧", "一起努力就行了", "反正一起扛呗", "各自加把劲吧"]));
+  text = text.replace(/我们(都)?需要(认真)?(思考|反思|面对|正视|审视)/gu, () => SENTINEL + pickU(["值得好好想想", "真得琢磨琢磨", "得认真对待这事", "这个不能不想"]));
+  text = text.replace(/这(一点|件事|个问题)值得我们(深思|重视|关注|思考)/gu, () => SENTINEL + pickU(["这个挺值得琢磨的", "这事真得好好想想", "这个问题其实挺重要的"]));
+  text = text.replace(/每个人(都)?(应该|需要|必须)(去)?(面对|思考|承担|重视)/gu, () => SENTINEL + pickU(["这事谁都躲不开", "每个人都得面对这个", "谁都一样，跑不掉"]));
+  text = text.replace(/只有这样[，,]?才能(.{2,20})/gu, (_, a) => SENTINEL + "这么做了，才有可能" + a);
+  text = text.replace(/唯有(.{2,15})[，,]?才能(.{2,20})/gu, (_, a, b) => SENTINEL + "只有" + a + "，才可能" + b);
+  text = text.replace(/活出(真正的|属于自己的)?人生(意义|价值|精彩)/gu, () => SENTINEL + pickU(["活得像自己", "活出点样来", "好好过自己的日子"]));
+  text = text.replace(/成为(更好的|更优秀的)?自己/gu, () => SENTINEL + pickU(["让自己好一点", "往好了走", "自己进步"]));
+
   // --- C. 转折/递进套话 ---
-  text = text.replace(/不仅仅是(.{2,20})[，,]?更是(.{2,20})/g, (_, a, b) => a + "，说到底也是" + b);
-  text = text.replace(/不仅如此[，,]?(.{3,30})/g, (_, a) => "而且，" + a);
-  text = text.replace(/更重要的是[，,]?(.{3,30})/g, (_, a) => "更关键的是，" + a);
-  text = text.replace(/与此同时[，,]?(.{3,30})/g, (_, a) => pickU(["同时呢，", "另外，", "还有就是，"]) + a);
-  text = text.replace(/除此之外[，,]?(.{3,30})/g, (_, a) => "另外，" + a);
-  text = text.replace(/值得一提的是[，,]?(.{3,30})/g, (_, a) => "顺带说一句，" + a);
-  text = text.replace(/值得注意的是[，,]?(.{3,30})/g, (_, a) => "要注意的是，" + a);
-  text = text.replace(/更为重要的是[，,]?(.{3,30})/g, (_, a) => "更重要的一点，" + a);
-  text = text.replace(/尤为值得(关注|重视|注意)的是[，,]?(.{3,30})/g, (_, x, b) => "尤其是，" + b);
+  pickU = makeScopedPickU();
+  text = text.replace(/不仅仅是(.{2,20})[，,]?更是(.{2,20})/gu, (_, a, b) => SENTINEL + a + "，说到底也是" + b);
+  text = text.replace(/不仅如此[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "而且，" + a);
+  text = text.replace(/更重要的是[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "更关键的是，" + a);
+  text = text.replace(/与此同时[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["同时呢，", "另外，", "还有就是，"]) + a);
+  text = text.replace(/除此之外[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "另外，" + a);
+  text = text.replace(/值得一提的是[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "顺带说一句，" + a);
+  text = text.replace(/值得注意的是[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "要注意的是，" + a);
+  text = text.replace(/更为重要的是[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "更重要的一点，" + a);
+  text = text.replace(/尤为值得(关注|重视|注意)的是[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "尤其是，" + b);
+
   // --- D. 归因/论证套话 ---
-  text = text.replace(/这(也|就)是为什么(.{3,20})(的原因)?/g, (_, x, b) => "所以才会" + b.replace(/的原因$/, ""));
-  text = text.replace(/归根结底[，,]?(.{3,30})/g, (_, a) => pickU(["说到底，", "追根到底，", "根子上，"]) + a);
-  text = text.replace(/从本质上(来说|来看|讲)[，,]?(.{3,30})/g, (_, x, b) => "说白了，" + b);
-  text = text.replace(/从某种意义上(来说|来看|讲)[，,]?(.{3,30})/g, (_, x, b) => "某种程度上，" + b);
-  text = text.replace(/从长远(来看|来说|角度)[，,]?(.{3,30})/g, (_, x, b) => "往长远了想，" + b);
-  text = text.replace(/从根本上(来说|来看|讲)[，,]?(.{3,30})/g, (_, x, b) => "根本上，" + b);
-  text = text.replace(/正(如|像)(.{2,15})(所)?说(的那样)?[，,]?/g, (_, x, b) => b + "这话说得对，");
-  text = text.replace(/这(背后|深处)隐藏着?(.{2,20})/g, (_, x, b) => "这背后其实是" + b);
-  text = text.replace(/这(无疑|确实)是(.{3,25})(的体现|的证明|的反映)/g, (_, x, b) => "这说明" + b);
-  text = text.replace(/这(充分)?(说明|证明|表明|揭示)了?(.{3,25})/g, (_, x, y, c) => "这其实就是说，" + c);
-  text = text.replace(/由此(可以)?(看出|得出|发现|推断)[，,]?(.{3,30})/g, (_, x, y, c) => "所以说，" + c);
-  text = text.replace(/可以(看出|看到|发现|得出)[，,]?(.{3,30})/g, (_, x, b) => "能看出来，" + b);
+  pickU = makeScopedPickU();
+  text = text.replace(/这(也|就)是为什么(.{3,20})(的原因)?/gu, (_, x, b) => SENTINEL + "所以才会" + b.replace(/的原因$/, ""));
+  text = text.replace(/归根结底[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["说到底，", "追根到底，", "根子上，"]) + a);
+  text = text.replace(/从本质上(来说|来看|讲)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + pickU(["说白了，", "讲白了，", "直说吧，", "往明白说，"]) + b);
+  text = text.replace(/从某种意义上(来说|来看|讲)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "某种程度上，" + b);
+  text = text.replace(/从长远(来看|来说|角度)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "往长远了想，" + b);
+  text = text.replace(/从根本上(来说|来看|讲)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "根本上，" + b);
+  text = text.replace(/正(如|像)(.{2,15})(所)?说(的那样)?[，,]?/gu, (_, x, b) => SENTINEL + b + "这话说得对，");
+  text = text.replace(/这(背后|深处)隐藏着?(.{2,20})/gu, (_, x, b) => SENTINEL + "这背后其实是" + b);
+  text = text.replace(/这(无疑|确实)是(.{3,25})(的体现|的证明|的反映)/gu, (_, x, b) => SENTINEL + "这说明" + b);
+  text = text.replace(/这(充分)?(说明|证明|表明|揭示)了?(.{3,25})/gu, (_, x, y, c) => SENTINEL + "这其实就是说，" + c);
+  text = text.replace(/由此(自由|可以)?(看出|得出|发现|推断)[，,]?(.{3,30})/gu, (_, x, y, c) => SENTINEL + "所以说，" + c); // Wait, "由此(可以)?"
+  text = text.replace(/由此(可以)?(看出|得出|发现|推断)[，,]?(.{3,30})/gu, (_, x, y, c) => SENTINEL + "所以说，" + c);
+  text = text.replace(/(?:不难|可以)(看出|得出|发现)[，,]?([^。？！\n]{3,30})/gu, (_, x, b) => SENTINEL + "能看出来，" + b);
+
   // --- E. 假设/条件句 ---
-  text = text.replace(/假如(.{2,20})[，,]?那么(.{3,25})/g, (_, a, b) => "要是" + a + "，那" + b);
-  text = text.replace(/一旦(.{2,20})[，,]?就(会|能|可能)?(.{3,25})/g, (_, a, x, b) => "等" + a + "了，就" + b);
-  text = text.replace(/无论(.{2,12})(如何|怎样|怎么)[，,]?/g, (_, b) => "不管" + b + "咋样，");
-  text = text.replace(/不管(遇到)?什么(样的)?(困难|挑战|问题|情况)[，,]?/g, () => "不管碰上什么事，");
-  text = text.replace(/在任何(情况|时候|时刻)(下|里)?[，,]?/g, () => "任何时候，");
+  pickU = makeScopedPickU();
+  text = text.replace(/假如(.{2,20})[，,]?那么(.{3,25})/gu, (_, a, b) => SENTINEL + "要是" + a + "，那" + b);
+  text = text.replace(/一旦(.{2,20})[，,]?就(会|能|可能)?(.{3,25})/gu, (_, a, x, b) => SENTINEL + "等" + a + "了，就" + b);
+  text = text.replace(/无论(.{2,12})(如何|怎样|怎么)[，,]?/gu, (_, b) => SENTINEL + "不管" + b + "咋样，");
+  text = text.replace(/不管(遇到)?什么(样的)?(困难|挑战|问题|情况)[，,]?/gu, () => SENTINEL + "不管碰上什么事，");
+  text = text.replace(/在任何(情况|时候|时刻)(下|里)?[，,]?/gu, () => SENTINEL + "任何时候，");
+
   // --- F. 强调/肯定套话 ---
-  text = text.replace(/毫无疑问[，,]?(.{3,30})/g, (_, a) => pickU(["这个没跑，", "肯定，", "这毫无悬念，"]) + a);
-  text = text.replace(/众所周知[，,]?(.{3,30})/g, (_, a) => pickU(["大家都知道，", "这个不用说，", "谁都知道，"]) + a);
-  text = text.replace(/不可否认[，,]?(.{3,30})/g, (_, a) => pickU(["得承认，", "没法否认，", "这个确实，"]) + a);
-  text = text.replace(/显而易见[，,]?(.{3,30})/g, (_, a) => pickU(["一眼就能看出来，", "很明显，", "这还用说，"]) + a);
-  text = text.replace(/不言而喻[，,]?(.{3,30})/g, (_, a) => "这个不用解释，" + a);
-  text = text.replace(/毋庸置疑[，,]?(.{3,30})/g, (_, a) => "这点不用怀疑，" + a);
-  text = text.replace(/理所当然[，,]?(.{3,30})/g, (_, a) => "当然，" + a);
-  text = text.replace(/无可厚非[，,]?(.{3,30})/g, (_, a) => "也说得过去，" + a);
-  text = text.replace(/无可辩驳[，,]?(.{3,30})/g, (_, a) => "这个反驳不了，" + a);
-  text = text.replace(/这是毋庸置疑的/g, () => "这个跑不掉");
-  text = text.replace(/这是不争的(事实|道理)/g, () => "这是实打实的");
+  pickU = makeScopedPickU();
+  text = text.replace(/毫无疑问[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["这个没跑，", "肯定，", "这毫无悬念，"]) + a);
+  text = text.replace(/众所周知[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["大家都知道，", "这个不用说，", "谁都知道，"]) + a);
+  text = text.replace(/不可否认[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["得承认，", "没法否认，", "这个确实，"]) + a);
+  text = text.replace(/显而易见[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["一眼就能看出来，", "很明显，", "这还用说，"]) + a);
+  text = text.replace(/不言而喻[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "这个不用解释，" + a);
+  text = text.replace(/毋庸置疑[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "这点不用怀疑，" + a);
+  text = text.replace(/理所当然[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "当然，" + a);
+  text = text.replace(/无可厚非[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "也说得过去，" + a);
+  text = text.replace(/无可辩驳[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "这个反驳不了，" + a);
+  text = text.replace(/这是毋庸置疑的/gu, () => SENTINEL + "这个跑不掉");
+  text = text.replace(/这是不争的(事实|道理)/gu, () => SENTINEL + "这是实打实的");
+
   // --- G. 承认/转折套话 ---
-  text = text.replace(/我们(不得不|必须)承认[，,]?(.{3,30})/g, (_, x, b) => "不得不说，" + b);
-  text = text.replace(/诚然[，,]?(.{3,30})/g, (_, a) => "当然了，" + a);
-  text = text.replace(/固然[，,]?(.{3,30})/g, (_, a) => "确实，" + a);
-  text = text.replace(/当然[，,]?这(并不|不)意味着(.{3,25})/g, (_, x, b) => "当然，这不是说" + b);
-  text = text.replace(/尽管如此[，,]?(.{3,30})/g, (_, a) => "就算这样，" + a);
-  text = text.replace(/话虽如此[，,]?(.{3,30})/g, (_, a) => "这么说是这么说，不过，" + a);
-  text = text.replace(/即便如此[，,]?(.{3,30})/g, (_, a) => "就算这样，" + a);
-  text = text.replace(/尽管(.{3,20})[，,]?但(是)?(.{3,25})/g, (_, a, x, b) => "虽说" + a + "，不过" + b);
+  pickU = makeScopedPickU();
+  text = text.replace(/我们(不得不|必须)承认[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "不得不说，" + b);
+  text = text.replace(/诚然[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "当然了，" + a);
+  text = text.replace(/固然[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "确实，" + a);
+  text = text.replace(/当然[，,]?这(并不|不)意味着(.{3,25})/gu, (_, x, b) => SENTINEL + "当然，这不是说" + b);
+  text = text.replace(/尽管如此[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "就算这样，" + a);
+  text = text.replace(/话虽如此[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "这么说是这么说，不过，" + a);
+  text = text.replace(/即便如此[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "就算这样，" + a);
+  text = text.replace(/尽管(.{3,20})[，,]?但(是)?(.{3,25})/gu, (_, a, x, b) => SENTINEL + "虽说" + a + "，不过" + b);
+
   // --- H. 主语"我们"宣言句 ---
-  text = text.replace(/我们(每个人)?(都)?(有责任|有义务|应该|需要)(.{2,20})/g, (_, x, y, z, d) => "大家都得" + d);
-  text = text.replace(/我们(一起|共同)(创造|构建|打造|守护)(.{2,15})/g, (_, x, y, c) => "一块儿把" + c + "搞好");
-  text = text.replace(/我们(坚信|相信|深信)(.{3,25})/g, (_, x, b) => "说真的，" + b + "，这个我是信的");
+  pickU = makeScopedPickU();
+  text = text.replace(/我们(每个人)?(都)?(有责任|有义务|应该|需要)(.{2,20})/gu, (_, x, y, z, d) => SENTINEL + "大家都得" + d);
+  text = text.replace(/我们(一起|共同)(创造|构建|打造|守护)(.{2,15})/gu, (_, x, y, c) => SENTINEL + "一块儿把" + c + "搞好");
+  text = text.replace(/我们(坚信|相信|深信)(.{3,25})/gu, (_, x, b) => SENTINEL + "说真的，" + b + "，这个我是信的");
+
   // --- I. "这是一个X的X"结构 ---
-  text = text.replace(/这是一个(.{2,15})的问题/g, (_, a) => "这事吧，" + a + "，确实不简单");
-  text = text.replace(/这是一个(.{2,15})的时代/g, () => pickU(["现在这年头，", "如今这社会，"]));
-  text = text.replace(/这种(现象|情况|问题).{0,10}(越来越|日益|逐渐)?(常见|普遍|突出|严重)/g, () => pickU(["这种事现在挺多的", "这情况也不少见", "这事其实挺普遍的"]));
+  pickU = makeScopedPickU();
+  text = text.replace(/这是一个(.{2,15})的问题/gu, (_, a) => SENTINEL + "这事吧，" + a + "，确实不简单");
+  text = text.replace(/这是一个(.{2,15})的时代/gu, () => SENTINEL + pickU(["现在这年头，", "如今这社会，"]));
+  text = text.replace(/这种(现象|情况|问题).{0,10}(越来越|日益|逐渐)?(常见|普遍|突出|严重)/gu, () => SENTINEL + pickU(["这种事现在挺多的", "这情况也不少见", "这事其实挺普遍的"]));
+
   // --- J. 过程/阶段句 ---
-  text = text.replace(/在(.{2,10})的过程中[，,]?我们?/g, (_, a) => "做" + a + "这件事的时候");
-  text = text.replace(/经过(.{2,15})的(努力|积累|沉淀|磨练)[，,]?/g, (_, a) => "熬过了" + a + "之后，");
-  text = text.replace(/经历了(.{2,15})之后[，,]?/g, (_, a) => a + "这一关过了，");
-  text = text.replace(/在(.{2,10})的(道路|旅程|过程)上[，,]?/g, (_, a) => "走在" + a + "这条路上，");
-  text = text.replace(/在(.{2,10})的(磨砺|锤炼|历练)中[，,]?/g, (_, a) => "经历过" + a + "之后，");
+  pickU = makeScopedPickU();
+  text = text.replace(/在(.{2,10})的过程中[，,]?我们?/gu, (_, a) => SENTINEL + "做" + a + "这件事的时候");
+  text = text.replace(/经过(.{2,15})的(努力|积累|沉淀|磨练)[，,]?/gu, (_, a) => SENTINEL + "熬过了" + a + "之后，");
+  text = text.replace(/经历了(.{2,15})之后[，,]?/gu, (_, a) => SENTINEL + a + "这一关过了，");
+  text = text.replace(/在(.{2,10})的(道路|旅程|过程)上[，,]?/gu, (_, a) => SENTINEL + "走在" + a + "这条路上，");
+  text = text.replace(/在(.{2,10})的(磨砺|锤炼|历练)中[，,]?/gu, (_, a) => SENTINEL + "经历过" + a + "之后，");
+
   // --- K. 方面/领域句 ---
-  text = text.replace(/在(.{2,10})方面[，,]?/g, (_, a) => "说到" + a + "这块，");
-  text = text.replace(/在(.{2,10})(领域|行业|范畴)[，,]?/g, (_, a) => a + "这行，");
-  text = text.replace(/对于(.{2,15})(而言|来说|来讲)[，,]?/g, (_, a) => "对" + a + "来说，");
-  text = text.replace(/就(.{2,15})(而言|来说|来讲)[，,]?/g, (_, a) => "说到" + a + "，");
+  pickU = makeScopedPickU();
+  text = text.replace(/在(.{2,10})方面[，,]?/gu, (_, a) => SENTINEL + "说到" + a + "这块，");
+  text = text.replace(/在(.{2,10})(领域|行业|范畴)[，,]?/gu, (_, a) => SENTINEL + a + "这行，");
+  text = text.replace(/对于(.{2,15})(而言|来说|来讲)[，,]?/gu, (_, a) => SENTINEL + "对" + a + "来说，");
+  text = text.replace(/就(.{2,15})(而言|来说|来讲)[，,]?/gu, (_, a) => SENTINEL + "说到" + a + "，");
+
   // --- L. 感受/无法描述句 ---
-  text = text.replace(/(这|那)种(感觉|体验|心情|滋味)是无法(用语言)?(描述|言说|形容)的/g, () => pickU(["这感觉真说不出来", "怎么说呢，就是说不明白", "这个，嗯，真挺难描述"]));
-  text = text.replace(/(这|那)种(感觉|体验|心情|滋味)难以(言说|言表|形容|描述)/g, () => "这个感受，说也说不清楚");
-  text = text.replace(/内心(深处)?(的)?(感受|触动|共鸣|波动)/g, () => pickU(["心里那种感觉", "心里头", "内心里"]));
-  text = text.replace(/让(人|我们)(感到|觉得)(无比)?(温暖|感动|震撼|欣慰)/g, (_, x, y, z, d) => "真挺" + d + "的");
+  pickU = makeScopedPickU();
+  text = text.replace(/(这|那)种(感觉|体验|心情|滋味)是无法(用语言)?(描述|言说|形容)的/gu, () => SENTINEL + pickU(["这感觉真说不出来", "怎么说呢，就是说不明白", "这个，嗯，真挺难描述"]));
+  text = text.replace(/(这|那)种(感觉|体验|心情|滋味)难以(言说|言表|形容|描述)/gu, () => SENTINEL + "这个感受，说也说不清楚");
+  text = text.replace(/内心(深处)?(的)?(感受|触动|共鸣|波动)/gu, () => SENTINEL + pickU(["心里那种感觉", "心里头", "内心里"]));
+  text = text.replace(/让(人|我们)(感到|觉得)(无比)?(温暖|感动|震撼|欣慰)/gu, (_, x, y, z, d) => SENTINEL + "真挺" + d + "的");
+
   // --- M. 深度/意义句 ---
-  text = text.replace(/其(深层|背后)(原因|逻辑|本质)[，,]?是(.{3,25})/g, (_, x, y, c) => "背后的原因嘛，是" + c);
-  text = text.replace(/(值得|令人)(深思|深省|玩味|反思)(的是)?[，,]?(.{3,30})/g, (_, x, y, z, d) => "让人想想，" + d);
-  text = text.replace(/折射出(.{3,25})/g, (_, a) => "其实反映了" + a);
-  text = text.replace(/映射出(.{3,25})/g, (_, a) => "说明了" + a);
-  text = text.replace(/这(其中|里面)蕴含着?(.{3,25})/g, (_, x, b) => "这里头其实有" + b);
+  pickU = makeScopedPickU();
+  text = text.replace(/其(深层|背后)(原因|逻辑|本质)[，,]?是(.{3,25})/gu, (_, x, y, c) => SENTINEL + "背后的原因嘛，是" + c);
+  text = text.replace(/(值得|令人)(深思|深省|玩味|反思)(的是)?[，,]?(.{3,30})/gu, (_, x, y, z, d) => SENTINEL + "让人想想，" + d);
+  text = text.replace(/折射出(.{3,25})/gu, (_, a) => SENTINEL + "其实反映了" + a);
+  text = text.replace(/映射出(.{3,25})/gu, (_, a) => SENTINEL + "说明了" + a);
+  text = text.replace(/这(其中|里面)蕴含着?(.{3,25})/gu, (_, x, b) => SENTINEL + "这里头其实有" + b);
+
   // --- N. 总结/收尾套话 ---
-  text = text.replace(/综上所述[，,]?(.{3,30})/g, (_, a) => "总的来说，" + a);
-  text = text.replace(/总而言之[，,]?(.{3,30})/g, (_, a) => pickU(["反正，", "总之，", "一句话，"]) + a);
-  text = text.replace(/总(的来说|结一下|体来说)[，,]?(.{3,30})/g, (_, x, b) => "总的来说，" + b);
-  text = text.replace(/一言以蔽之[，,]?(.{3,30})/g, (_, a) => "一句话，" + a);
-  text = text.replace(/简而言之[，,]?(.{3,30})/g, (_, a) => "简单说就是，" + a);
-  text = text.replace(/总体而言[，,]?(.{3,30})/g, (_, a) => "整体上，" + a);
+  pickU = makeScopedPickU();
+  text = text.replace(/综上所述[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "总的来说，" + a);
+  text = text.replace(/总而言之[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["反正，", "总之，", "一句话，"]) + a);
+  text = text.replace(/总(的来说|结一下|体来说)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "总的来说，" + b);
+  text = text.replace(/一言以蔽之[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "一句话，" + a);
+  text = text.replace(/简而言之[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "简单说就是，" + a);
+  text = text.replace(/总体而言[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "整体上，" + a);
+
   // --- O. 高频AI其他句式 ---
-  text = text.replace(/这(充分)?(体现|彰显|展现)了?(.{3,25})(的重要性|的价值|的意义)?/g, (_, x, y, c) => "这说明" + c + "确实重要");
-  text = text.replace(/我们(应该|需要|必须)(正视|审视|重视|关注)(.{2,20})/g, (_, x, y, c) => "这个" + c + "，得好好对待");
-  text = text.replace(/在(.{2,10})的(指引|引领|带领|推动)(下|之下)[，,]?/g, (_, a) => "靠着" + a + "，");
-  text = text.replace(/以(.{2,10})为(导向|目标|核心|宗旨)[，,]?/g, (_, a) => "奔着" + a + "去，");
-  text = text.replace(/(.{2,12})的(重要性|必要性|紧迫性)(不言而喻|显而易见|毋庸置疑)/g, (_, a) => a + "这事，还是挺重要的");
-  text = text.replace(/我们(正处于|处于|身处)(.{2,15})(的)?(时代|阶段|时期|关键节点)/g, () => pickU(["现在这时候，", "这年头，", "如今，"]));
-  text = text.replace(/面对(.{2,15})(的)?(挑战|压力|困境|困难)[，,]?/g, (_, a) => "碰上" + a + "这事，");
-  text = text.replace(/(.{2,15})的(核心|关键|本质|精髓)(在于|是)(.{3,25})/g, (_, a, x, y, d) => a + "最关键的，其实是" + d);
-  text = text.replace(/这(给我们|提醒我们|告诉我们)(.{3,30})/g, (_, x, b) => "这说明，" + b);
-  text = text.replace(/由此(可见|可知|可以看出)[，,]?(.{3,30})/g, (_, x, b) => "这么一来就知道，" + b);
-  text = text.replace(/这(就|也)意味着(.{3,30})/g, (_, x, b) => "这也就是说，" + b);
-  text = text.replace(/换(句话说|言之|个角度)[，,]?(.{3,30})/g, (_, x, b) => "说白了，" + b);
-  text = text.replace(/说到底[，,]?(.{3,30})/g, (_, a) => "说白了，" + a);
-  text = text.replace(/这(是|也是)(一种|一个)(必然|必然的)(结果|趋势|选择)/g, () => "这也没啥好奇怪的");
-  text = text.replace(/(不断|持续)(提升|提高|改善|优化)(.{2,15})/g, (_, x, y, c) => "把" + c + "慢慢做好");
-  text = text.replace(/实现(.{2,15})(的)?(目标|梦想|愿望|理想)/g, (_, a) => "把" + a + "做成");
-  text = text.replace(/(.{2,10})是(我们|每个人|大家)(共同)?(追求|向往|渴望)的/g, (_, a) => "大家都想要" + a);
-  text = text.replace(/这(说明|表明|证明)了?一个道理[，,]?(.{3,30})/g, (_, x, b) => "这事其实说明，" + b);
-  text = text.replace(/很多时候[，,]?(.{3,30})/g, (_, a) => pickU(["有时候，", "不少时候，", "很多情况下，"]) + a);
-  text = text.replace(/在某种程度上[，,]?(.{3,30})/g, (_, a) => "多少有点，" + a);
-  text = text.replace(/从某种角度(来)?(看|说|讲)[，,]?(.{3,30})/g, (_, x, y, c) => "换个角度看，" + c);
-  text = text.replace(/事实上[，,]?(.{3,30})/g, (_, a) => pickU(["其实，", "说真的，", "讲真，"]) + a);
-  text = text.replace(/实际上[，,]?(.{3,30})/g, (_, a) => pickU(["其实，", "说白了，", "实话说，"]) + a);
-  text = text.replace(/追根溯源[，,]?(.{3,30})/g, (_, a) => "往根儿上追，" + a);
-  text = text.replace(/殊不知[，,]?(.{3,30})/g, (_, a) => "其实人不知道的是，" + a);
-  text = text.replace(/其实不然[，,]?(.{3,30})/g, (_, a) => "其实不是这回事，" + a);
-  text = text.replace(/恰恰相反[，,]?(.{3,30})/g, (_, a) => "反倒是，" + a);
-  text = text.replace(/出乎意料(的是)?[，,]?(.{3,30})/g, (_, x, b) => "没想到，" + b);
-  text = text.replace(/令人(惊讶|惊喜|意外|诧异)(的是)?[，,]?(.{3,30})/g, (_, x, y, c) => "没想到，" + c);
+  pickU = makeScopedPickU();
+  text = text.replace(/这(充分)?(体现|彰显|展现)了?(.{3,25})(的重要性|的价值|的意义)?/gu, (_, x, y, c) => SENTINEL + "这说明" + c + "确实重要");
+  text = text.replace(/我们(应该|需要|必须)(正视|审视|重视|关注)(.{2,20})/gu, (_, x, y, c) => SENTINEL + "这个" + c + "，得好好对待");
+  text = text.replace(/在(.{2,10})的(指引|引领|带领|推动)(下|之下)[，,]?/gu, (_, a) => SENTINEL + "靠着" + a + "，");
+  text = text.replace(/以(.{2,10})为(导向|目标|核心|宗旨)[，,]?/gu, (_, a) => SENTINEL + "奔着" + a + "去，");
+  text = text.replace(/(.{2,12})的(重要性|必要性|紧迫性)(不言而喻|显而易见|毋庸置疑)/gu, (_, a) => SENTINEL + a + "这事，还是挺重要的");
+  text = text.replace(/我们(正处于|处于|身处)(.{2,15})(的)?(时代|阶段|时期|关键节点)/gu, () => SENTINEL + pickU(["现在这时候，", "这年头，", "如今，"]));
+  text = text.replace(/面对(.{2,15})(的)?(挑战|压力|困境|困难)[，,]?/gu, (_, a) => SENTINEL + "碰上" + a + "这事，");
+  text = text.replace(/(.{2,15})的(核心|关键|本质|精髓)(在于|是)(.{3,25})/gu, (_, a, x, y, d) => SENTINEL + a + "最关键的，其实是" + d);
+  text = text.replace(/这(给我们|提醒我们|告诉我们)(.{3,30})/gu, (_, x, b) => SENTINEL + "这说明，" + b);
+  text = text.replace(/由此(可见|可知|可以看出)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "这么一来就知道，" + b);
+  text = text.replace(/这(就|也)意味着(.{3,30})/gu, (_, x, b) => SENTINEL + "这也就是说，" + b);
+  text = text.replace(/换(句话说|言之|个角度)[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + pickU(["说白了，", "换个说法，", "直接点说，", "其实就是，"]) + b);
+  text = text.replace(/说到底[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["说白了，", "归根到底，", "往根上说，"]) + a);
+  text = text.replace(/这(是|也是)(一种|一个)(必然|必然的)(结果|趋势|选择)/gu, () => SENTINEL + "这也没啥好奇怪的");
+  text = text.replace(/(不断|持续)(提升|提高|改善|优化)(自身|自我|能力|素质|效率|体验|品质|质量|水平|价值|效益|竞争力|形象|地位|成绩)/gu, (_, x, y, c) => SENTINEL + "把" + c + "慢慢做好");
+  text = text.replace(/实现(.{2,15})(的)?(目标|梦想|愿望|理想)/gu, (_, a) => SENTINEL + "把" + a + "做成");
+  text = text.replace(/([^，。？！、\s]{2,10})是(我们|每个人|大家)(共同)?(追求|向往|渴望)的/gu, (_, a) => SENTINEL + "大家都想要" + a);
+  text = text.replace(/这(说明|表明|证明)了?一个道理[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "这事其实说明，" + b);
+  text = text.replace(/很多人很多时候[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["有时候，", "不少时候，", "很多情况下，"]) + a); // Wait, "很多时候[，,]?(.{3,30})"
+  text = text.replace(/很多时候[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["有时候，", "不少时候，", "很多情况下，"]) + a);
+  text = text.replace(/在某种程度上[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "多少有点，" + a);
+  text = text.replace(/从某种角度(来)?(看|说|讲)[，,]?(.{3,30})/gu, (_, x, y, c) => SENTINEL + "换个角度看，" + c);
+  text = text.replace(/事实上[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["其实，", "说真的，", "讲真，"]) + a);
+  text = text.replace(/实际上[，,]?(.{3,30})/gu, (_, a) => SENTINEL + pickU(["其实，", "说白了，", "实话说，"]) + a);
+  text = text.replace(/追根溯源[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "往根儿上追，" + a);
+  text = text.replace(/殊不知[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "其实人不知道的是，" + a);
+  text = text.replace(/其实不然[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "其实不是这回事，" + a);
+  text = text.replace(/恰恰相反[，,]?(.{3,30})/gu, (_, a) => SENTINEL + "反倒是，" + a);
+  text = text.replace(/出乎意料(的是)?[，,]?(.{3,30})/gu, (_, x, b) => SENTINEL + "没想到，" + b);
+
+  text = text.replace(/令人(惊讶|惊喜|意外|诧异)(的是)?[，,]?(.{3,30})/gu, (_, x, y, c) => SENTINEL + "没想到，" + c);
+
+  // --- P. 列举/排比句 ---
+  pickU = makeScopedPickU();
+  text = text.replace(/无论是(.{2,15})[，,]?还是(.{2,15})[，,]?(还是|亦或是)(.{2,15})/gu,
+    (_, a, b, x, c) => SENTINEL + a + "也好，" + b + "也好，" + c + "也罢");
+
+  text = text.replace(/不仅(.{2,20})[，,]?而且(.{2,20})/gu,
+    (_, a, b) => SENTINEL + "不光" + a + "，还" + b);
+  text = text.replace(/既(.{2,18})[，,]?又(.{2,18})/gu,
+    (_, a, b) => SENTINEL + a + "，同时也" + b);
+  text = text.replace(/一方面(.{3,25})[，,]?另一方面(.{3,25})/gu,
+    (_, a, b) => SENTINEL + "这边" + a + "，那边" + b);
+
+  // --- Q. 因果链条 ---
+  pickU = makeScopedPickU();
+  text = text.replace(/正因为(如此|这样)[，,]?(.{3,25})/gu,
+    (_, x, b) => SENTINEL + "就因为这个，" + b);
+  text = text.replace(/之所以(.{3,20})[，,]?是因为(.{3,25})/gu,
+    (_, a, b) => SENTINEL + a + "，归根到底是" + b);
+  text = text.replace(/正是(由于|因为)(.{3,20})[，,]?(才|所以)(.{3,25})/gu,
+    (_, x, a, y, b) => SENTINEL + "就是因为" + a + "，所以" + b);
+  text = text.replace(/(.{2,15})是(.{2,15})的(前提|基础|保障|关键)/gu,
+    (_, a, b, c) => SENTINEL + "要" + b + "，" + a + "跑不掉");
+
+  // --- R. 动宾搭配 ---
+  pickU = makeScopedPickU();
+  text = text.replace(/对(.{2,15})进行(深入|全面|系统|详细)?(的)?(分析|研究|探讨|讨论|思考)/gu,
+    (_, a, x, y, z) => SENTINEL + "好好看看" + a);
+  text = text.replace(/做出(正确|合理|恰当|明智)(的)?(选择|判断|决定|决策)/gu,
+    (_, a, x, b) => SENTINEL + "选对路");
+  text = text.replace(/给予(足够|充分|更多)(的)?(关注|重视|支持|帮助)/gu,
+    (_, a, x, b) => SENTINEL + "多" + b + "一下");
+  text = text.replace(/发挥(.{2,10})(的)?(作用|优势|价值|潜力)/gu,
+    (_, a, x, b) => SENTINEL + "让" + a + "管用");
+  text = text.replace(/扮演着?(.{2,15})(的)?角色/gu,
+    (_, a) => SENTINEL + "就是" + a);
+  text = text.replace(/承担着?(.{2,15})(的)?(责任|使命|任务)/gu,
+    (_, a) => SENTINEL + "扛着" + a + "的活");
+
+  // --- S. 比喻/修辞 ---
+  pickU = makeScopedPickU();
+  text = text.replace(/犹如(.{2,15})(一般|一样|似的)/gu,
+    (_, a) => SENTINEL + "就像" + a);
+  text = text.replace(/宛如(.{2,15})(一般|一样)/gu,
+    (_, a) => SENTINEL + "像" + a + "似的");
+  text = text.replace(/如同(.{2,15})(一般|一样|似的)/gu,
+    (_, a) => SENTINEL + "跟" + a + "一样");
+  text = text.replace(/是(.{2,12})的(一面镜子|缩影|写照)/gu,
+    (_, a) => SENTINEL + "其实就是" + a + "的样子");
 
   // ====== 第三步：词汇替换（旧规则保留，补充少量更口语的短词）======
   const S = [
     ["然而", ["可", "但", "不过", "话说回来"]],
     ["因此", ["所以", "那", "这么一来"]],
     ["此外", ["另外", "还有", "对了"]],
-    ["尽管", ["虽说", "虽然", "就算"]],
+    // "尽管" 已被第二步 G 组正则覆盖，此处不重复
     ["但是", ["但", "可", "不过", "偏偏"]],
     ["并且", ["而且", "还", "加上"]],
     ["非常", ["挺", "特别", "贼", "太"]],
-    ["实际上", ["其实", "说白了", "讲真"]],
+    // "实际上" 已被第二步 O 组正则覆盖，此处不重复
     ["逐渐", ["慢慢", "一点点"]],
     ["导致", ["搞得", "弄得", "闹得"]],
     ["如果", ["要是", "万一"]],
@@ -1072,7 +1156,7 @@ function deAIStatisticalFingerprint(markdown) {
     ["已经", ["都", "早就", "早"]],
     ["需要", ["得", "要"]],
     ["能够", ["能", "可以"]],
-    ["进行", ["做", "搞", "弄"]],
+    ["进行", ["做", "搞", "弄"], /进行(?!中)/gu],
     ["那么", ["那", "那样的话"]],
     ["或许", ["可能", "没准", "说不定"]],
     ["获得", ["拿到", "得到"]],
@@ -1091,7 +1175,7 @@ function deAIStatisticalFingerprint(markdown) {
     ["目前", ["现在", "眼下"]],
     ["仿佛", ["好像", "像"]],
     ["似乎", ["好像", "感觉"]],
-    ["困难", ["费劲", "够呛", "头疼"]],
+    ["困难", ["费劲", "够呛", "头疼"], /困难(?!群众|家庭|补助|户|学生)/gu],
     ["有效", ["管用", "好使"]],
     ["必然", ["肯定", "跑不了"]],
     ["潜移默化", ["不知不觉"]],
@@ -1100,27 +1184,51 @@ function deAIStatisticalFingerprint(markdown) {
     ["越来越", ["慢慢"]],
     ["经常", ["三天两头", "动不动"]],
     ["尤其", ["更别说", "特别是"]],
-    ["或者", ["要不", "不然"]],
-    ["存在", ["有", "出了"]],
+    ["或者说", ["要不就说", "换句话说"]],
+    ["或者是", ["要不就是", "或者是"]],
+    ["存在", ["有", "出了"], /(?<!客观)存在(?!主义)/gu],
     ["极其", ["特别", "贼"]],
     ["引发", ["惹出", "招来"]],
     ["具备", ["有", "带着"]],
     ["明显", ["明摆着", "一看就知道"]],
-    ["严重", ["不轻", "够受的"]],
-    ["丰富", ["花样多", "五花八门"]],
-    ["偶尔", ["隔三差五", "有时候"]],
+    ["严重", ["不轻", "够受的"], /(?<=极|极其|非常|特别|十分|很)严重|严重(?=的)/gu],
+    ["丰富多彩", ["花样繁多", "多姿多彩", "五花八门"]],
+    ["偶尔", ["有时候", "偶尔也会"]],
+    
+    // --- 新增口语化词汇 ---
+    ["即使", ["就算", "哪怕"]],
+    ["倘若", ["要是", "万一"]],
+    ["相当", ["挺", "蛮"]],
+    ["格外", ["特别", "额外"]],
+    ["略微", ["稍微", "有点"]],
+    ["涉及", ["跟…有关", "牵扯到"]],
+    ["契机", ["机会", "时机"]],
+    ["共识", ["一致看法", "都认"]],
+    ["途径", ["路子", "办法"]],
+    ["不过", ["可", "但"]],
+    ["同样", ["也", "一样"]],
+    ["相反", ["反过来", "倒过来"]],
+    ["尽管", ["虽说", "虽然"]],
+    ["当下", ["如今", "眼下"]],
   ];
 
-  for (const [w, alts] of S) {
-    if (text.includes(w)) {
-      text = text.split(w).map((p, i, a) =>
-        i === a.length - 1 ? p : p + (rng() < 0.85 ? pickU(alts) : w)
-      ).join("");
+  for (const [w, alts, regex] of S) {
+    const wordPickU = makeScopedPickU();
+    if (regex) {
+      text = text.replace(regex, (match) => {
+        return rng() < 0.85 ? SENTINEL + wordPickU(alts) : match;
+      });
+    } else {
+      if (text.includes(w)) {
+        text = text.split(w).map((p, i, a) =>
+          i === a.length - 1 ? p : p + (rng() < 0.85 ? SENTINEL + wordPickU(alts) : w)
+        ).join("");
+      }
     }
   }
 
   // 跑完句式规则后再扫一遍，处理新生成片段里的残留高频词。
-  text = applyAigcLexiconReplacements(text, { rng, pickUnique: pickU, probability: 0.74 });
+  text = applyAigcLexiconReplacements(text, { rng, pickUnique: makeScopedPickU(), probability: 0.74 });
 
   // ====== 第四步（核心）：选择性重度改写 → 制造burstiness ======
   const paragraphs = text.split(/\n\n+/);
@@ -1220,10 +1328,9 @@ function deAIStatisticalFingerprint(markdown) {
     finalParagraphs = clampArticleParagraphsToMax([text], rng);
   }
 
-  return finalParagraphs.join("\n\n").trim();
-}
-
-function classicArticlePostprocess(markdown) {
+  // 清除 sentinel 标记（防二次匹配用的零宽空格）
+  return finalParagraphs.join("\n\n").replace(/\u200B/g, "").trim();
+}function classicArticlePostprocess(markdown) {
   return typeof markdown === "string" ? markdown.trim() : markdown;
 }
 
@@ -1235,8 +1342,6 @@ function postprocessArticleMarkdown(markdown, payload) {
     ? classicArticlePostprocess(technicalAdjustedMarkdown)
     : deAIStatisticalFingerprint(technicalAdjustedMarkdown);
 }
-
-
 
 export async function generateArticleContent(payload, userId = null) {
   const config = await getGenerationConfig(payload, userId);
