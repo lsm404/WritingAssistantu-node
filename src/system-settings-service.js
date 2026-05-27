@@ -6,13 +6,111 @@ const IMAGE_SETTING_KEYS = {
   baseUrl: "image_base_url",
 };
 
+export const TEXT_MODEL_PROVIDERS = {
+  DOUBAO: "doubao",
+  DEEPSEEK: "deepseek",
+  KIMI: "kimi",
+  MIMO: "mimo",
+};
+
+const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1";
+
 const TEXT_SETTING_KEYS = {
-  apiKey: "text_api_key",
-  model: "text_model",
-  baseUrl: "text_base_url",
+  provider: "text_provider",
   enableWebSearch: "text_enable_web_search",
   reasoningEffort: "text_reasoning_effort",
 };
+
+const TEXT_PROVIDER_SETTING_KEYS = {
+  [TEXT_MODEL_PROVIDERS.DOUBAO]: {
+    apiKey: "text_api_key",
+    model: "text_model",
+    baseUrl: "text_base_url",
+  },
+  [TEXT_MODEL_PROVIDERS.DEEPSEEK]: {
+    apiKey: "text_deepseek_api_key",
+    model: "text_deepseek_model",
+    baseUrl: "text_deepseek_base_url",
+  },
+  [TEXT_MODEL_PROVIDERS.KIMI]: {
+    apiKey: "text_kimi_api_key",
+    model: "text_kimi_model",
+    baseUrl: "text_kimi_base_url",
+  },
+  [TEXT_MODEL_PROVIDERS.MIMO]: {
+    apiKey: "text_mimo_api_key",
+    model: "text_mimo_model",
+    baseUrl: "text_mimo_base_url",
+  },
+};
+
+const TEXT_PROVIDER_DEFAULTS = {
+  [TEXT_MODEL_PROVIDERS.DOUBAO]: {
+    apiKey: () => process.env.ARK_API_KEY?.trim() || "",
+    model: () => process.env.ARK_MODEL?.trim() || "",
+    baseUrl: () => process.env.ARK_BASE_URL?.trim() || DEFAULT_ARK_BASE_URL,
+  },
+  [TEXT_MODEL_PROVIDERS.DEEPSEEK]: {
+    apiKey: () => process.env.ARK_DEEPSEEK_API_KEY?.trim() || "",
+    model: () => process.env.ARK_DEEPSEEK_MODEL?.trim() || "deepseek-v3-2-251201",
+    baseUrl: () => process.env.ARK_DEEPSEEK_BASE_URL?.trim() || process.env.ARK_BASE_URL?.trim() || DEFAULT_ARK_BASE_URL,
+  },
+  [TEXT_MODEL_PROVIDERS.KIMI]: {
+    apiKey: () => process.env.ARK_KIMI_API_KEY?.trim() || "",
+    model: () => process.env.ARK_KIMI_MODEL?.trim() || "kimi-k2-thinking-251104",
+    baseUrl: () => process.env.ARK_KIMI_BASE_URL?.trim() || process.env.ARK_BASE_URL?.trim() || DEFAULT_ARK_BASE_URL,
+  },
+  [TEXT_MODEL_PROVIDERS.MIMO]: {
+    apiKey: () => process.env.MIMO_API_KEY?.trim() || "",
+    model: () => process.env.MIMO_MODEL?.trim() || "mimo-v2.5-pro",
+    baseUrl: () => process.env.MIMO_BASE_URL?.trim() || DEFAULT_MIMO_BASE_URL,
+  },
+};
+
+const TEXT_PROVIDER_VALUES = new Set(Object.values(TEXT_MODEL_PROVIDERS));
+
+export function normalizeTextProvider(value, model = "") {
+  const rawProvider = String(value || "").trim().toLowerCase();
+  if (TEXT_PROVIDER_VALUES.has(rawProvider)) {
+    return rawProvider;
+  }
+
+  const rawModel = String(model || "").trim().toLowerCase();
+  if (rawModel.startsWith("deepseek")) {
+    return TEXT_MODEL_PROVIDERS.DEEPSEEK;
+  }
+  if (rawModel.startsWith("kimi") || rawModel.includes("moonshot")) {
+    return TEXT_MODEL_PROVIDERS.KIMI;
+  }
+  if (rawModel.startsWith("mimo")) {
+    return TEXT_MODEL_PROVIDERS.MIMO;
+  }
+
+  return TEXT_MODEL_PROVIDERS.DOUBAO;
+}
+
+function getTextSettingKeys() {
+  return [
+    ...Object.values(TEXT_SETTING_KEYS),
+    ...Object.values(TEXT_PROVIDER_SETTING_KEYS).flatMap((keys) => Object.values(keys)),
+  ];
+}
+
+function readTextProviderSettings(provider, stored) {
+  const keys = TEXT_PROVIDER_SETTING_KEYS[provider];
+  const defaults = TEXT_PROVIDER_DEFAULTS[provider];
+
+  return {
+    apiKey: stored[keys.apiKey] || defaults.apiKey(),
+    model: stored[keys.model] || defaults.model(),
+    baseUrl: stored[keys.baseUrl] || defaults.baseUrl(),
+  };
+}
+
+function providerPayloadHasField(payload, field) {
+  return payload && Object.prototype.hasOwnProperty.call(payload, field);
+}
 
 /** 注册风控（供注册接口读取；管理员可在后台改，无需改代码） */
 export const REGISTRATION_POLICY_KEYS = {
@@ -112,28 +210,65 @@ export async function updateImageGenerationSettings(payload) {
 }
 
 export async function getTextGenerationSettings() {
-  const stored = await getSystemSettings(Object.values(TEXT_SETTING_KEYS));
+  const stored = await getSystemSettings(getTextSettingKeys());
+  const providers = Object.fromEntries(
+    Object.values(TEXT_MODEL_PROVIDERS).map((provider) => [
+      provider,
+      readTextProviderSettings(provider, stored),
+    ]),
+  );
+  const provider = normalizeTextProvider(
+    stored[TEXT_SETTING_KEYS.provider] || process.env.ARK_TEXT_PROVIDER?.trim(),
+    providers[TEXT_MODEL_PROVIDERS.DOUBAO].model,
+  );
+  const active = providers[provider] || providers[TEXT_MODEL_PROVIDERS.DOUBAO];
 
   return {
-    apiKey: stored[TEXT_SETTING_KEYS.apiKey] || process.env.ARK_API_KEY?.trim() || "",
-    model: stored[TEXT_SETTING_KEYS.model] || process.env.ARK_MODEL?.trim() || "",
-    baseUrl:
-      stored[TEXT_SETTING_KEYS.baseUrl] ||
-      process.env.ARK_BASE_URL?.trim() ||
-      "https://ark.cn-beijing.volces.com/api/v3",
+    provider,
+    providers,
+    apiKey: active.apiKey,
+    model: active.model,
+    baseUrl: active.baseUrl,
     enableWebSearch: stored[TEXT_SETTING_KEYS.enableWebSearch] === "true",
     reasoningEffort: stored[TEXT_SETTING_KEYS.reasoningEffort] || "medium",
   };
 }
 
 export async function updateTextGenerationSettings(payload) {
+  const provider = normalizeTextProvider(payload.provider, payload.model);
   const next = {
-    [TEXT_SETTING_KEYS.apiKey]: String(payload.apiKey || "").trim(),
-    [TEXT_SETTING_KEYS.model]: String(payload.model || "").trim(),
-    [TEXT_SETTING_KEYS.baseUrl]: String(payload.baseUrl || "").trim(),
+    [TEXT_SETTING_KEYS.provider]: provider,
     [TEXT_SETTING_KEYS.enableWebSearch]: payload.enableWebSearch ? "true" : "false",
     [TEXT_SETTING_KEYS.reasoningEffort]: String(payload.reasoningEffort || "medium").trim(),
   };
+
+  const providerUpdates = {
+    ...(payload.providers && typeof payload.providers === "object" ? payload.providers : {}),
+  };
+  providerUpdates[provider] = {
+    ...(providerUpdates[provider] || {}),
+    ...(providerPayloadHasField(payload, "apiKey") ? { apiKey: payload.apiKey } : {}),
+    ...(providerPayloadHasField(payload, "model") ? { model: payload.model } : {}),
+    ...(providerPayloadHasField(payload, "baseUrl") ? { baseUrl: payload.baseUrl } : {}),
+  };
+
+  for (const providerName of Object.values(TEXT_MODEL_PROVIDERS)) {
+    const providerPayload = providerUpdates[providerName];
+    if (!providerPayload || typeof providerPayload !== "object") {
+      continue;
+    }
+
+    const keys = TEXT_PROVIDER_SETTING_KEYS[providerName];
+    if (providerPayloadHasField(providerPayload, "apiKey")) {
+      next[keys.apiKey] = String(providerPayload.apiKey || "").trim();
+    }
+    if (providerPayloadHasField(providerPayload, "model")) {
+      next[keys.model] = String(providerPayload.model || "").trim();
+    }
+    if (providerPayloadHasField(providerPayload, "baseUrl")) {
+      next[keys.baseUrl] = String(providerPayload.baseUrl || "").trim();
+    }
+  }
 
   await upsertSystemSettings(next);
   return getTextGenerationSettings();

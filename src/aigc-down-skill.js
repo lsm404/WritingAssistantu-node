@@ -48,7 +48,7 @@ function readBundledSkill() {
   }
 }
 
-function getAigcDownInstructions() {
+function buildAigcDownInstructions(deploymentNote) {
   return [
     readBundledSkill(),
     "",
@@ -58,8 +58,28 @@ function getAigcDownInstructions() {
     "",
     "## 部署运行补充",
     "",
-    "本次调用发生在文章生成后的自动二次处理中。必须保留原文体裁；如果原文是公众号文章，不要改成论文。只输出最终 Markdown 成稿，不输出报告、评分、解释或多个版本。",
+    deploymentNote,
   ].join("\n");
+}
+
+function getAigcDownInstructions() {
+  return buildAigcDownInstructions(
+    "本次调用发生在文章生成后的自动二次处理中。必须保留原文体裁；如果原文是公众号文章，不要改成论文。只输出最终 Markdown 成稿，不输出报告、评分、解释或多个版本。",
+  );
+}
+
+export function getInlineAigcDownInstructions() {
+  return buildAigcDownInstructions(
+    [
+      "本次规则已经合并到首次文章生成请求中。请在创作成稿时直接应用 AIGC-Down 规则，提前避开模板化、论文腔、口号式总结和高频 AI 痕迹；不要等待二次改写。",
+      "",
+      "硬性要求：",
+      "1. 只输出最终 Markdown 成稿。",
+      "2. 保留当前创作任务要求的体裁、标题结构、主要观点和大致长度。",
+      "3. 不要输出解释、报告、评分、自检清单、前后对比或多个版本。",
+      "4. 不要新增未经用户提供或搜索工具证实的事实、数据、案例、引用或人物经历。",
+    ].join("\n"),
+  );
 }
 
 export function buildAigcDownRequestBody(payload, config, articleMd, options = {}) {

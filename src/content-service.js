@@ -1,9 +1,13 @@
-import { getUserModelConfig } from "./auth-service.js";
-import { getImageGenerationSettings, getTextGenerationSettings } from "./system-settings-service.js";
+import {
+  TEXT_MODEL_PROVIDERS,
+  getImageGenerationSettings,
+  getTextGenerationSettings,
+  normalizeTextProvider,
+} from "./system-settings-service.js";
 import {
   AIGC_DOWN_SKILL_NAME,
   AIGC_DOWN_SKILL_VERSION,
-  buildAigcDownRequestBody,
+  getInlineAigcDownInstructions,
 } from "./aigc-down-skill.js";
 import {
   applyAigcLexiconReplacements,
@@ -11,6 +15,7 @@ import {
 } from "./aigc-lexicon.js";
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1";
 const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
 const GEMINI_MODEL_ERROR_CODE = "GEMINI_MODEL_CONNECTING";
 const ARTICLE_MIN_CHARS = 1000;
@@ -25,35 +30,32 @@ const LEGACY_GENERIC_PROMPT_MARKERS = [
   "## 3. 增加“作者存在感”",
   "你是一个真实公众号作者",
 ];
-const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个中文内容生成和改写助手。默认任务是根据用户主题写一篇微信公众号文章，但这是一套通用模板，所有题材都统一采用“自然、略啰嗦、解释性更强、但不明显扩写”的写法。内容可以更通俗，但不能过度口语化；如果涉及论文、毕业设计、技术文档、接口文档、系统设计说明或代码说明，也要把这些约束融合进同一套写法里，而不是另起一种风格。
+const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个中文内容生成和改写助手。你的目标是直接生成自然、极具人类真实写作特征的公众号文章，能够完美避开所有 AI 文本检测系统（如朱雀检测）。
 
-普通公众号写作核心规则：
+在生成成稿时，请在文章中直接应用并贯彻以下【人类写作特征规范】，确保文章的统计学指纹完全符合人类行为：
 
-1. 全文至少5处用不常见的口语化说法替代标准书面语（每个说法只能出现一次，不准重复）。
+1. 【制造句长极差（攻破句长标准差）】：
+   - 禁止让句子的字数维持在平滑的均等区间。必须制造“极短句”与“极长句”的多峰分布。
+   - 每段中必须包含至少 2-3 个极短句（2-6字），例如：“确实。”“很难。”“就这？”“没别的原因。”“说干就干。”。
+   - 每段也必须包含 1-2 个长句（40-60字以上），允许使用多个逗号进行口语化的自然连接。
 
-2. 可以使用少量虚词来模拟自然节奏，比如"也是""这个""反正""其实""就是说""说白了""当然了""说起来"。不要刻意堆砌语气词，尤其不要出现“至于xxx呢”“xxx呢”这类句式。
+2. 【制造信息稀疏区（攻破信息密度）】：
+   - 杜绝信息均匀平铺。在阐述完干货、事实或观点后，必须插入毫无实质信息量、仅起语气过渡或大白话修饰作用的“呼吸句/废话”，例如：“其实说白了，也就那点事。”“这倒也难说。”“反正大家心里都明白。”。
 
-3. 句子长度要自然变化。可以连续写两三个中等句子再来一个特别短的，也可以连续几个短句后来一个长的。不要机械地长-短-长-短交替。
+3. 【禁用 AI 标志词与套话（攻破连接词偏好）】：
+   - 严禁使用以下高频 AI 词汇和连接词：【首先、其次、最后、综上所述、由此可见、不难发现、值得一提的是、毋庸置疑、在这个时代、底层逻辑、赋能、抓手、维度、共同努力】。
+   - 尽量省略连接词，或改用最通俗的口语化连接，如：“但”、“不过”、“另外”、“所以”。
 
-4. 至少3处要省略主语。中文口语经常省略主语。比如不写"他回到家"写"回到家"，不写"我们发现"写"仔细一看"。
+4. 【打破段落均衡（攻破段落工整度）】：
+   - 段落长度要极度不对称。有的段落只有一句话，有的段落包含四五句话。
+   - 绝对不要在段落结尾、或者文章结尾进行升华、扣题或模板化总结。说完事实或观点就立刻停住。
 
-5. 至少2处要有未说完的话或自我修正。比如"本来想说——算了""这么讲也不全对""可能有点极端，但是"。
+5. 【标点习惯与的/地/得混用（攻破标点习惯）】：
+   - 以逗号和句号为主，杜绝排比或连续问句。
+   - 允许出现人类写作中极常见的轻微语病或“的/地/得”混用，多用“的”少用“地”（例如：“悄悄的走”）。
 
-6. 开头不要描写场景画面，直接从一个判断或态度开始写。全文带主观偏见，不需要面面俱到，可以只讲你认同的那一面。不编造具体人物故事，但可以说"我见过""我碰到过"这种模糊引用。
+只输出最终的 Markdown 文本成稿，不要输出标题（不要用 # 号），不要输出任何解释、写作思路或前后对比。`;
 
-7. 不要把每段都写得一样长，不要排比，不要用"首先其次最后""总而言之""不难发现""值得一提""众所周知""由此可见""底层逻辑""赋能""抓手""在这个XX的时代"。
-
-8. 结尾不要升华不要喊口号。说完就停。
-
-9. 标点尽量克制，以中文逗号和中文句号为主，不要滥用引号、省略号、破折号、书名号、分隔线、箭头等特殊标点。涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要的括号、斜杠、点号、冒号、反引号等必须保留。
-
-10. 可以自然分段。段落内部尽量用中文逗号连接，段尾用句号结束。不要为了形式统一而破坏技术标识或原有结构。
-
-11. 融合论文和技术文档的稳定改写规则：保持核心技术信息、事实、逻辑关系和专业术语不变。修改后字数要与原文基本相符，不要明显长于原文。不要第一人称。技术术语、代码片段、库名、配置项、接口路径、文件名、类名必须原样保留。可把“采用/使用”改为“运用/选用”，“利用/通过”改为“借助/依靠/凭借”，“和/及/与”改为“以及”，“符合”改为“契合”，“适合”改为“适宜”，“特点”改为“特性”，“原因”改为“缘由”；可把“配置、处理、恢复、管理、交互、实现”等动词短语适度扩展为“进行配置、进行处理、进行恢复、开展管理工作、进行交互、得以实现”。括号里的解释可自然融入句子，比如 ORM（对象关系映射）改为 ORM也就是对象关系映射。
-
-12. 整体表达要稍微更饱满，但不能为了显得人工而扩写太多。优先做轻量替换、短语扩展、括号整合和句式微调，不要新增事实、案例、数据、接口、配置项、实现细节或外部背景。
-
-只输出 Markdown 成稿，不要输出标题（不要用 # 号）。`;
 const CLASSIC_GENERIC_SYSTEM_PROMPT = `# Role
 
 你是一名成熟的微信公众号内容编辑，擅长把一个主题写成清楚、有信息量、有观点、适合直接发布的公众号文章。
@@ -98,7 +100,7 @@ const ARTICLE_FORMAT_INSTRUCTION = [
   BASIC_ARTICLE_FORMAT_INSTRUCTION,
   "可以适当补充“的、了、所、会、可以、这个、方面、当中”等辅助词，让文字更饱满；不要大量堆砌口语虚词。",
 ].join("\n");
-const AI_RULE_INSTRUCTIONS_MAX_CHARS = 8000;
+const AI_RULE_INSTRUCTIONS_MAX_CHARS = 20000;
 const AI_RULE_TRUNCATION_MARKER = "…[已按平台规则截断]";
 const ARTICLE_FORBIDDEN_INNER_PUNCTUATION = /[。！？!?；;：:、—–-]|…+|\.{2,}/g;
 const REWRITE_GOAL_LABELS = {
@@ -266,14 +268,14 @@ function getBooleanEnv(name, fallback = false) {
   return ["1", "true", "yes", "on"].includes(value);
 }
 
-function shouldAutoApplyAigcDown(payload) {
+function shouldInlineAigcDownRules(payload) {
   if (payload?.regenerate_for_de_ai) {
     return false;
   }
   if (payload?.auto_aigc_down === false || payload?.auto_aigc_down === "false") {
     return false;
   }
-  return getBooleanEnv("AUTO_AIGC_DOWN_ENABLED", true);
+  return getBooleanEnv("INLINE_AIGC_DOWN_ENABLED", true);
 }
 
 /** 本地调试：打印发往 Ark 的参数（密钥仅打码，不落盘完整 key） */
@@ -333,9 +335,14 @@ function buildSystemPrompt(payload) {
   }
   const toneInstruction =
     promptVariant === PROMPT_VARIANTS.CLASSIC ? CLASSIC_DE_AI_TONE_INSTRUCTION : DE_AI_TONE_INSTRUCTION;
+  const inlineAigcDownInstructions =
+    shouldInlineAigcDownRules(payload) && promptVariant !== PROMPT_VARIANTS.AIGC
+      ? getInlineAigcDownInstructions()
+      : "";
   const requiredRules = [
     text.includes(toneInstruction) ? "" : toneInstruction,
     formatInstruction && !text.includes("段内优先使用中文逗号") ? formatInstruction : "",
+    inlineAigcDownInstructions && !text.includes("AIGC-Down") ? inlineAigcDownInstructions : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -505,36 +512,46 @@ function buildUserPrompt(payload) {
     .join("\n");
 }
 
-async function getGenerationConfig(payload, userId = null) {
+async function getGenerationConfig(payload, _userId = null) {
   const systemText = await getTextGenerationSettings();
-  const userCfg = userId ? await getUserModelConfig(userId) : null;
 
-  /** API Key：用户自带优先；模型：后台「文本生成」全局配置优先于用户 model_configs，避免后台已升 2.0 仍被旧用户表或仅 env 覆盖 */
-  const apiKey =
-    (userCfg?.textApiKey && String(userCfg.textApiKey).trim()) ||
-    systemText.apiKey ||
-    process.env.ARK_API_KEY?.trim() ||
-    "";
-  const model =
-    (systemText.model && String(systemText.model).trim()) ||
-    (userCfg?.textModel && String(userCfg.textModel).trim()) ||
-    process.env.ARK_MODEL?.trim() ||
-    "";
-  const baseUrl = systemText.baseUrl || process.env.ARK_BASE_URL?.trim() || DEFAULT_ARK_BASE_URL;
+  const provider = normalizeTextProvider(systemText.provider, systemText.model);
+  const apiKey = String(systemText.apiKey || "").trim();
+  const model = String(systemText.model || "").trim();
+  const baseUrl = systemText.baseUrl || DEFAULT_ARK_BASE_URL;
   const enableWebSearch =
     typeof payload.enable_web_search === "boolean"
       ? payload.enable_web_search
       : systemText.enableWebSearch ?? getBooleanEnv("ARK_ENABLE_WEB_SEARCH", false);
 
   if (!apiKey) {
+    if (provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
+      throw new Error("ARK_DEEPSEEK_API_KEY_MISSING");
+    }
+    if (provider === TEXT_MODEL_PROVIDERS.KIMI) {
+      throw new Error("ARK_KIMI_API_KEY_MISSING");
+    }
+    if (provider === TEXT_MODEL_PROVIDERS.MIMO) {
+      throw new Error("MIMO_API_KEY_MISSING");
+    }
     throw new Error("ARK_API_KEY_MISSING");
   }
 
   if (!model) {
+    if (provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
+      throw new Error("ARK_DEEPSEEK_MODEL_MISSING");
+    }
+    if (provider === TEXT_MODEL_PROVIDERS.KIMI) {
+      throw new Error("ARK_KIMI_MODEL_MISSING");
+    }
+    if (provider === TEXT_MODEL_PROVIDERS.MIMO) {
+      throw new Error("MIMO_MODEL_MISSING");
+    }
     throw new Error("ARK_MODEL_MISSING");
   }
 
   return {
+    provider,
     apiKey,
     model,
     baseUrl,
@@ -595,7 +612,7 @@ function buildArkRequestBody(payload, config) {
   const jsonPayload = {
     model: config.model,
     instructions: systemText,
-    temperature: 1.6,
+    temperature: 1.1,
     input: userText,
     ...(config.enableWebSearch ? { tools: [{ type: "web_search" }] } : {}),
   };
@@ -607,6 +624,111 @@ function buildArkRequestBody(payload, config) {
   }
 
   return jsonPayload;
+}
+
+function buildResponsesRequestBody(payload, config) {
+  const systemText = buildSystemPrompt(payload);
+  const userText = buildUserPrompt(payload);
+
+  return {
+    model: config.model,
+    stream: false,
+    instructions: systemText,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: userText,
+          },
+        ],
+      },
+    ],
+    ...(config.enableWebSearch ? { tools: [{ type: "web_search", max_keyword: 3 }] } : {}),
+  };
+}
+
+function buildMimoChatRequestBody(payload, config) {
+  const systemText = buildSystemPrompt(payload);
+  const userText = buildUserPrompt(payload);
+
+  return {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content: systemText,
+      },
+      {
+        role: "user",
+        content: userText,
+      },
+    ],
+    max_completion_tokens: 2048,
+    temperature: 1.0,
+    top_p: 0.95,
+    stream: false,
+    stop: null,
+    frequency_penalty: 0,
+    presence_penalty: 0,
+    thinking: {
+      type: "enabled",
+    },
+  };
+}
+
+function buildArkEndpointUrl(baseUrl, endpoint) {
+  const trimmed = String(baseUrl || DEFAULT_ARK_BASE_URL).trim().replace(/\/+$/, "");
+  const normalizedEndpoint = endpoint.replace(/^\/+/, "");
+
+  if (trimmed.endsWith(`/${normalizedEndpoint}`)) {
+    return trimmed;
+  }
+
+  const withoutKnownEndpoint = trimmed.replace(/\/(?:responses|chat\/completions)$/u, "");
+  return `${withoutKnownEndpoint}/${normalizedEndpoint}`;
+}
+
+function buildMimoEndpointUrl(baseUrl) {
+  const trimmed = String(baseUrl || DEFAULT_MIMO_BASE_URL).trim().replace(/\/+$/, "");
+  if (trimmed.endsWith("/chat/completions")) {
+    return trimmed;
+  }
+  const withoutKnownEndpoint = trimmed.replace(/\/chat\/completions$/u, "");
+  return `${withoutKnownEndpoint}/chat/completions`;
+}
+
+function buildTextGenerationRequest(payload, config) {
+  if (config.provider === TEXT_MODEL_PROVIDERS.MIMO) {
+    return {
+      requestUrl: buildMimoEndpointUrl(config.baseUrl),
+      requestBody: buildMimoChatRequestBody(payload, config),
+      logKind: "text/mimo/chat-completions",
+    };
+  }
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
+    return {
+      requestUrl: buildArkEndpointUrl(config.baseUrl, "responses"),
+      requestBody: buildResponsesRequestBody(payload, config),
+      logKind: "text/responses",
+    };
+  }
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.KIMI) {
+    return {
+      requestUrl: buildArkEndpointUrl(config.baseUrl, "responses"),
+      requestBody: buildResponsesRequestBody(payload, config),
+      logKind: "text/responses",
+    };
+  }
+
+  return {
+    requestUrl: buildArkEndpointUrl(config.baseUrl, "responses"),
+    requestBody: buildArkRequestBody(payload, config),
+    logKind: "text/responses",
+  };
 }
 
 async function parseJsonResponse(response) {
@@ -623,8 +745,15 @@ async function parseJsonResponse(response) {
 }
 
 function extractArticleMarkdown(data) {
+  const chatMessageContent = data.choices?.[0]?.message?.content;
+  const chatContent = Array.isArray(chatMessageContent)
+    ? chatMessageContent
+        .map((item) => (typeof item === "string" ? item : item?.text || item?.content || ""))
+        .join("")
+    : chatMessageContent || "";
   const messageOutput = data.output?.find((item) => item.type === "message") ?? data.output?.[0];
   const articleMd =
+    chatContent ||
     messageOutput?.content
       ?.filter((item) => ["output_text", "text"].includes(item.type || ""))
       .map((item) => item.text || "")
@@ -635,73 +764,134 @@ function extractArticleMarkdown(data) {
   return articleMd.trim();
 }
 
+function parseEventStreamText(text) {
+  const chunks = [];
+  let current = [];
+
+  const flush = () => {
+    if (!current.length) {
+      return;
+    }
+    chunks.push(current.join("\n"));
+    current = [];
+  };
+
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      current.push(line.slice(5).trimStart());
+    }
+  }
+  flush();
+
+  let outputText = "";
+  let completedResponse = null;
+  let model = "";
+
+  for (const rawChunk of chunks) {
+    if (!rawChunk || rawChunk === "[DONE]") {
+      continue;
+    }
+
+    let event;
+    try {
+      event = JSON.parse(rawChunk);
+    } catch {
+      continue;
+    }
+
+    model = model || event.model || event.response?.model || "";
+    if (event.type === "response.completed" && event.response) {
+      completedResponse = event.response;
+      continue;
+    }
+    if (typeof event.delta === "string") {
+      outputText += event.delta;
+    }
+    if (typeof event.text === "string" && event.type?.includes("output_text")) {
+      outputText += event.text;
+    }
+  }
+
+  if (completedResponse) {
+    return {
+      ...completedResponse,
+      output_text: completedResponse.output_text || outputText,
+      model: completedResponse.model || model,
+    };
+  }
+
+  return {
+    output_text: outputText,
+    model,
+  };
+}
+
+function buildTextGenerationError(status, data, text) {
+  const error = data?.error && typeof data.error === "object" ? data.error : null;
+  const code = String(error?.code || data?.code || `HTTP_${status}` || "UPSTREAM_ERROR").trim();
+  const message = String(
+    error?.message ||
+      data?.message ||
+      data?.error ||
+      text ||
+      "AI 接口调用失败",
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+
+  return `AI_UPSTREAM_ERROR|${status}|${code}|${message}`;
+}
+
 async function callTextGeneration(requestUrl, apiKey, requestBody) {
   let response;
   let data;
+  let text = "";
   try {
     response = await fetch(requestUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        ...(
+          requestUrl.includes("xiaomimimo.com")
+            ? { "api-key": apiKey }
+            : { Authorization: `Bearer ${apiKey}` }
+        ),
       },
       body: JSON.stringify(requestBody),
     });
-    data = await parseJsonResponse(response);
+    text = await response.text();
   } catch {
     throw new Error(GEMINI_MODEL_ERROR_CODE);
   }
 
+  try {
+    const contentType = response.headers.get("content-type") || "";
+    const trimmedText = text.trim();
+    if ((requestBody?.stream || contentType.includes("text/event-stream")) && !trimmedText.startsWith("{")) {
+      data = parseEventStreamText(text);
+    } else if (trimmedText) {
+      data = JSON.parse(trimmedText);
+    } else {
+      data = {};
+    }
+  } catch {
+    if (!response.ok) {
+      throw new Error(buildTextGenerationError(response.status, {}, text));
+    }
+    throw new Error(`AI_UPSTREAM_INVALID_JSON|${response.status}|${text.slice(0, 500)}`);
+  }
+
   if (!response.ok) {
-    throw new Error(GEMINI_MODEL_ERROR_CODE);
+    throw new Error(buildTextGenerationError(response.status, data, text));
   }
 
   return data;
 }
-
-async function applyAigcDownSkill(articleMd, payload, config) {
-  if (!shouldAutoApplyAigcDown(payload)) {
-    return {
-      articleMd,
-      applied: false,
-      model: "",
-    };
-  }
-
-  const requestUrl = `${config.baseUrl.replace(/\/$/, "")}/responses`;
-  const requestBody = buildAigcDownRequestBody(payload, config, articleMd, { automatic: true });
-
-  logOutgoingAiCall("text/aigc-down", {
-    url: requestUrl,
-    authorizationBearer: maskSecret(config.apiKey),
-    requestBody,
-    clientPayloadSummary: {
-      length: payload.length,
-      mode: payload.mode,
-      creation_mode: payload.creation_mode,
-      prompt_variant: resolvePromptVariant(payload),
-      skill: AIGC_DOWN_SKILL_NAME,
-      skill_version: AIGC_DOWN_SKILL_VERSION,
-    },
-  });
-
-  const data = await callTextGeneration(requestUrl, config.apiKey, requestBody);
-  const rewrittenMd = postprocessArticleMarkdown(extractArticleMarkdown(data), {
-    ...payload,
-    regenerate_for_de_ai: true,
-  });
-
-  if (!rewrittenMd) {
-    throw new Error("ARTICLE_EMPTY");
-  }
-
-  return {
-    articleMd: rewrittenMd,
-    applied: true,
-    model: data.model || config.model,
-  };
-}
-
 
 /**
  * 反AI检测后处理器 v10 —— 突发性策略
@@ -1050,11 +1240,11 @@ function postprocessArticleMarkdown(markdown, payload) {
 
 export async function generateArticleContent(payload, userId = null) {
   const config = await getGenerationConfig(payload, userId);
-  const requestUrl = `${config.baseUrl.replace(/\/$/, "")}/responses`;
-  const requestBody = buildArkRequestBody(payload, config);
+  const { requestUrl, requestBody, logKind } = buildTextGenerationRequest(payload, config);
 
-  logOutgoingAiCall("text/responses", {
+  logOutgoingAiCall(logKind, {
     url: requestUrl,
+    provider: config.provider,
     authorizationBearer: maskSecret(config.apiKey),
     requestBody,
     clientPayloadSummary: {
@@ -1073,8 +1263,8 @@ export async function generateArticleContent(payload, userId = null) {
   if (!firstPassArticleMd) {
     throw new Error("ARTICLE_EMPTY");
   }
-  const aigcDown = await applyAigcDownSkill(firstPassArticleMd, payload, config);
-  const articleMd = aigcDown.articleMd;
+  const inlineAigcDownApplied = shouldInlineAigcDownRules(payload);
+  const articleMd = firstPassArticleMd;
 
   return {
     ok: true,
@@ -1086,10 +1276,12 @@ export async function generateArticleContent(payload, userId = null) {
       creation_mode: payload.creation_mode || "synthesized",
       prompt_variant: promptVariant,
       aigc_down: {
-        applied: aigcDown.applied,
+        applied: inlineAigcDownApplied,
+        mode: inlineAigcDownApplied ? "inline_prompt" : "disabled",
+        second_pass: false,
         skill: AIGC_DOWN_SKILL_NAME,
         version: AIGC_DOWN_SKILL_VERSION,
-        model: aigcDown.model || null,
+        model: inlineAigcDownApplied ? data.model || config.model : null,
       },
     },
   };

@@ -143,6 +143,12 @@ const ERROR_MESSAGE_MAP = {
   UPDATE_FAILED: "保存失败，请稍后再试",
   ARK_API_KEY_MISSING: "文本生成 API Key 未配置",
   ARK_MODEL_MISSING: "文本生成模型未配置",
+  ARK_DEEPSEEK_API_KEY_MISSING: "DeepSeek API Key 未配置",
+  ARK_DEEPSEEK_MODEL_MISSING: "DeepSeek 模型未配置",
+  ARK_KIMI_API_KEY_MISSING: "Kimi API Key 未配置",
+  ARK_KIMI_MODEL_MISSING: "Kimi 模型未配置",
+  MIMO_API_KEY_MISSING: "小米 MiMo API Key 未配置",
+  MIMO_MODEL_MISSING: "小米 MiMo 模型未配置",
   ARK_IMAGE_API_KEY_MISSING: "图片生成 API Key 未配置",
   ARK_IMAGE_MODEL_MISSING: "图片生成模型未配置",
   TOPIC_REQUIRED: "请先填写文章主题",
@@ -241,6 +247,19 @@ function getChineseErrorMessage(rawCode) {
 
   if (isGeminiModelErrorCode(code)) {
     return GEMINI_MODEL_CONNECTING_MESSAGE;
+  }
+
+  if (code.startsWith("AI_UPSTREAM_ERROR|")) {
+    const [, status = "", upstreamCode = "", upstreamMessage = ""] = code.split("|");
+    const suffix = upstreamCode ? `（${upstreamCode}${status ? `/${status}` : ""}）` : "";
+    if (upstreamCode === "InvalidEndpointOrModel.NotFound") {
+      return `AI 接口调用失败：模型或接入点不存在，或当前 API Key 没有权限。请在后台填写火山方舟控制台实际可调用的接入点 ID/模型名，并确认 Key 属于同一项目${suffix}`;
+    }
+    return `AI 接口调用失败：${upstreamMessage || "上游服务返回异常"}${suffix}`;
+  }
+
+  if (code.startsWith("AI_UPSTREAM_INVALID_JSON|")) {
+    return "AI 接口返回格式异常，请检查模型接口地址和模型名称";
   }
 
   if (code.startsWith("PLAN_WECHAT_LIMIT_EXCEEDED:")) {
@@ -615,6 +634,12 @@ const server = http.createServer(async (request, response) => {
               message === "SOURCE_ARTICLE_REQUIRED" ||
               message === "ARK_API_KEY_MISSING" ||
               message === "ARK_MODEL_MISSING" ||
+              message === "ARK_DEEPSEEK_API_KEY_MISSING" ||
+              message === "ARK_DEEPSEEK_MODEL_MISSING" ||
+              message === "ARK_KIMI_API_KEY_MISSING" ||
+              message === "ARK_KIMI_MODEL_MISSING" ||
+              message === "MIMO_API_KEY_MISSING" ||
+              message === "MIMO_MODEL_MISSING" ||
               message === "TEXT_QUOTA_EXCEEDED" ||
               message === "DE_AI_QUOTA_EXCEEDED"
               ? 400
