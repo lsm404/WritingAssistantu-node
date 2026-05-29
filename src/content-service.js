@@ -20,18 +20,56 @@ const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
 const GEMINI_MODEL_ERROR_CODE = "GEMINI_MODEL_CONNECTING";
 const ARTICLE_MIN_CHARS = 1000;
 const ARTICLE_MAX_CHARS = 1500;
+const ARTICLE_LENGTH_LIMITS = {
+  short: { min: 0, max: 300 },
+  medium: { min: 3000, max: 800 },
+  long: { min: 8000, max: 1500 },
+};
 const PROMPT_VARIANTS = {
   AIGC: "aigc",
   CLASSIC: "classic",
 };
-const CLAUDE_MODEL_IDENTITY_INSTRUCTION = "你是 Claude 模型。";
+const MODEL_IDENTITY_INSTRUCTION = "你是 OpenClaw 内容编辑助手。";
 const LEGACY_GENERIC_PROMPT_MARKERS = [
   "写出一篇真正像人类公众号作者深夜亲自写出来的内容",
   "## 3. 增加“作者存在感”",
   "你是一个真实公众号作者",
 ];
-const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个中文内容生成和改写助手。你的目标是直接生成自然、极具人类真实写作特征的公众号文章，能够完美避开所有 AI 文本检测系统（如朱雀检测）。
+const NORMALIZED_GENERIC_SYSTEM_PROMPT = `# Role
 
+你是一名成熟的微信公众号内容编辑，擅长把主题写成清楚、有信息量、有观点、适合直接发布的公众号文章。
+
+# 最高优先级规则
+
+默认不要写成第一人称故事。除非用户明确要求，否则不要用"我"作为全文主叙事视角，不要虚构连续私人经历，也不要写成个人崩溃、被安慰、突然释怀的情绪链条。
+
+文章可信度来自具体观察、逻辑判断、案例和信息密度，不靠卖惨、煽情或密集个人经历。
+
+# 内容目标
+
+默认优先写成观点型、分析型、实用型公众号文章。文章要有明确观点、具体信息、现实场景或案例，案例必须服务观点。
+
+如果主题偏情感，也要保持克制：情绪只作为切入口，主体仍然要落到观察、分析、行动建议或认知变化上。
+
+# 语言与结构
+
+语言清楚、自然、口语化一点，但不要散乱。可以有一点态度，但不要情绪泛滥。需要分节时，用 \`##\` 或 \`###\` 做有信息量的小标题，不要写"引言""正文""总结"。
+
+段落长度不要过于对称。有的段落只有一句话，有的段落可以有四五句。说完事实或观点就停住，不要在段尾刻意升华、扣题或模板化总结。
+
+避免过度煽情、大段心理独白、连续私人故事、苦难叙事、鸡汤式安慰、夸张反转，以及"突然就懂了""眼泪在眼眶里打转""那一刻我才明白"等情绪套路。
+
+# AI 特征风险规避
+
+严禁使用以下词汇和套话：首先、其次、最后、综上所述、由此可见、不难发现、值得一提的是、毋庸置疑、在这个时代、底层逻辑、赋能、抓手、维度、共同努力。
+
+不要写成"社交平台上关于某类人的分享，大多集中在几类内容：A、B、C。很多人会默认……但如果仔细观察……就会发现……"这种三项并列 + 群体判断 + 转折升华的结构。
+
+少连续使用"很多人会默认""但如果仔细观察就会发现""真正值得""从来不会""这些才是"等句式，避免同一段里堆叠多个绝对化判断。
+
+连接词尽量省略，或改用最通俗的口语化连接，如："但"、"不过"、"另外"、"所以"。
+
+不要为了降低 AI 痕迹额外编造现实例子、人物故事或私密经历。
 在生成成稿时，请在文章中直接应用并贯彻以下【人类写作特征规范】，确保文章的统计学指纹完全符合人类行为：
 
 1. 【制造句长极差（攻破句长标准差）】：
@@ -54,7 +92,9 @@ const NORMALIZED_GENERIC_SYSTEM_PROMPT = `你是一个中文内容生成和改�
    - 以逗号和句号为主，杜绝排比或连续问句。
    - 允许出现人类写作中极常见的轻微语病或“的/地/得”混用，多用“的”少用“地”（例如：“悄悄的走”）。
 
-只输出最终的 Markdown 文本成稿，不要输出标题（不要用 # 号），不要输出任何解释、写作思路或前后对比。`;
+# 输出要求
+
+只输出最终 Markdown 成稿，不要解释写作思路，不要给多个版本，不要输出任何正文之外的内容。，不要输出任何解释、写作思路或前后对比`;
 
 const CLASSIC_GENERIC_SYSTEM_PROMPT = `# Role
 
@@ -89,17 +129,31 @@ const DE_AI_TONE_INSTRUCTION =
   "用词要自然通俗，略微啰嗦一点，多做轻量解释，但不要明显扩写。不要过度口语化，不要出现“至于xxx呢”“xxx呢”这类句式。标点以中文逗号和句号为主，涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要符号必须保留。";
 const CLASSIC_DE_AI_TONE_INSTRUCTION =
   "我希望文本略有点生涩和稚嫩，用那种中文并不是很精通的人的语气撰写这个文本，稍微学术一点，态度端正一点，更多体现在语言上的大白话";
-const STRICT_ARTICLE_LENGTH_DESCRIPTION = `严格控制在 ${ARTICLE_MIN_CHARS}-${ARTICLE_MAX_CHARS} 字，正文不要低于 ${ARTICLE_MIN_CHARS} 字，也不要超过 ${ARTICLE_MAX_CHARS} 字。`;
-const BASIC_ARTICLE_FORMAT_INSTRUCTION = [
-  `全文字数必须在 ${ARTICLE_MIN_CHARS}-${ARTICLE_MAX_CHARS} 字之间。`,
-  "允许自然分段，段内优先使用中文逗号作为停顿标点。",
-  "每一段段尾尽量使用中文句号。不要滥用问号、感叹号、分号、冒号、省略号、破折号等标点；但涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要符号必须原样保留。",
-  "不要输出标题符号、列表符号或解释说明，只输出成稿正文。",
-].join("\n");
-const ARTICLE_FORMAT_INSTRUCTION = [
-  BASIC_ARTICLE_FORMAT_INSTRUCTION,
-  "可以适当补充“的、了、所、会、可以、这个、方面、当中”等辅助词，让文字更饱满；不要大量堆砌口语虚词。",
-].join("\n");
+function getArticleLengthLimit(length) {
+  return ARTICLE_LENGTH_LIMITS[length] || ARTICLE_LENGTH_LIMITS.medium;
+}
+
+function buildStrictArticleLengthDescription(length) {
+  const { min, max } = getArticleLengthLimit(length);
+  return `尽量控制在在 ${max} 汉字左右`;
+}
+
+function buildArticleFormatInstruction(length) {
+  const { min, max } = getArticleLengthLimit(length);
+  return [
+    `全文中文字数尽量控制在在 ${max} 汉字左右`,
+    "允许自然分段，段内优先使用中文逗号作为停顿标点。",
+    "每一段段尾尽量使用中文句号。不要滥用问号、感叹号、分号、冒号、省略号、破折号等标点；但涉及技术术语、代码片段、配置项、接口路径、文件名、类名或 Markdown 结构时，必要符号必须原样保留。",
+    "不要输出标题符号、列表符号或解释说明，只输出成稿正文。",
+  ].join("\n");
+}
+
+function buildArticleFormatInstructionWithStyle(length) {
+  return [
+    buildArticleFormatInstruction(length),
+    "可以适当补充“的、了、所、会、可以、这个、方面、当中”等辅助词，让文字更饱满；不要大量堆砌口语虚词。",
+  ].join("\n");
+}
 const AI_RULE_INSTRUCTIONS_MAX_CHARS = 20000;
 const AI_RULE_TRUNCATION_MARKER = "…[已按平台规则截断]";
 const ARTICLE_FORBIDDEN_INNER_PUNCTUATION = /[。！？!?；;：:、—–-]|…+|\.{2,}/g;
@@ -129,9 +183,9 @@ const EXPRESSION_REQUIREMENTS = {
   opinionated: "情绪极度饱满，爱憎分明，该激动就激动，带入强烈的个人主观色彩。",
 };
 const LENGTH_DESCRIPTIONS = {
-  short: STRICT_ARTICLE_LENGTH_DESCRIPTION,
-  medium: STRICT_ARTICLE_LENGTH_DESCRIPTION,
-  long: STRICT_ARTICLE_LENGTH_DESCRIPTION,
+  short: buildStrictArticleLengthDescription("short"),
+  medium: buildStrictArticleLengthDescription("medium"),
+  long: buildStrictArticleLengthDescription("long"),
 };
 const CLASSIC_LENGTH_DESCRIPTIONS = {
   short: "偏短，约 500-800 字。",
@@ -169,10 +223,10 @@ function getVariantSystemPrompt(variant) {
     : NORMALIZED_GENERIC_SYSTEM_PROMPT;
 }
 
-function getVariantFormatInstruction(variant) {
+function getVariantFormatInstruction(variant, length) {
   return variant === PROMPT_VARIANTS.CLASSIC
     ? ""
-    : ARTICLE_FORMAT_INSTRUCTION;
+    : buildArticleFormatInstructionWithStyle(length);
 }
 
 function normalizeArticleSegmentText(segment) {
@@ -227,23 +281,26 @@ function splitArticleParagraphs(segment, rng = Math.random) {
   return result;
 }
 
-function clampArticleParagraphsToMax(segments, rng = Math.random) {
+function clampArticleParagraphsToMax(segments, rng = Math.random, maxChars = ARTICLE_MAX_CHARS) {
   const normalized = [];
   let total = 0;
 
   for (const raw of segments) {
     for (const segment of splitArticleParagraphs(raw, rng)) {
       const currentLength = countArticleCharacters(segment);
-      if (total + currentLength <= ARTICLE_MAX_CHARS) {
+      if (total + currentLength <= maxChars) {
         normalized.push(segment);
         total += currentLength;
         continue;
       }
 
-      const remaining = ARTICLE_MAX_CHARS - total;
+      const remaining = maxChars - total;
       if (remaining >= 80) {
         const trimmed = normalizeArticleSegmentText(segment.slice(0, Math.max(0, remaining - 1)));
-        if (trimmed) normalized.push(trimmed);
+        if (trimmed) {
+          normalized.push(trimmed);
+          total += countArticleCharacters(trimmed);
+        }
       }
       return normalized;
     }
@@ -322,7 +379,7 @@ function enforceTwoPartAiRules(partA, partB, maxChars) {
 function buildSystemPrompt(payload) {
   const promptVariant = resolvePromptVariant(payload);
   const defaultSystemPrompt = getVariantSystemPrompt(promptVariant);
-  const formatInstruction = getVariantFormatInstruction(promptVariant);
+  const formatInstruction = getVariantFormatInstruction(promptVariant, payload?.length);
   let text = String(payload.system_prompt || "").trim();
   if (LEGACY_GENERIC_PROMPT_MARKERS.every((marker) => text.includes(marker))) {
     text = defaultSystemPrompt;
@@ -330,8 +387,8 @@ function buildSystemPrompt(payload) {
   if (!text) {
     text = defaultSystemPrompt;
   }
-  if (!text.startsWith(CLAUDE_MODEL_IDENTITY_INSTRUCTION)) {
-    text = `${CLAUDE_MODEL_IDENTITY_INSTRUCTION}\n\n${text}`;
+  if (!text.startsWith(MODEL_IDENTITY_INSTRUCTION)) {
+    text = `${MODEL_IDENTITY_INSTRUCTION}\n\n${text}`;
   }
   const toneInstruction =
     promptVariant === PROMPT_VARIANTS.CLASSIC ? CLASSIC_DE_AI_TONE_INSTRUCTION : DE_AI_TONE_INSTRUCTION;
@@ -399,7 +456,7 @@ function buildLifeSliceStyleInstruction() {
 
 function buildUserPrompt(payload) {
   const promptVariant = resolvePromptVariant(payload);
-  const formatInstruction = getVariantFormatInstruction(promptVariant);
+  const formatInstruction = getVariantFormatInstruction(promptVariant, payload?.length);
   const existing = String(payload.user_prompt || "").trim();
   if (existing) {
     return formatInstruction ? [existing, "", "硬性输出要求：", formatInstruction].join("\n") : existing;
@@ -478,7 +535,8 @@ function buildUserPrompt(payload) {
       payload.style ? `风格偏好：${payload.style}` : "",
       payload.expression_mode ? `表达处理：${buildExpressionRequirement(payload.expression_mode)}` : "",
       "",
-      promptVariant === PROMPT_VARIANTS.CLASSIC ? "" : buildLifeSliceStyleInstruction(),
+      (promptVariant !== PROMPT_VARIANTS.CLASSIC && !["analysis", "case_study", "listicle"].includes(payload.mode))
+        ? buildLifeSliceStyleInstruction() : "",
       "",
       "参考文章如下：",
       sourceArticle,
@@ -504,7 +562,8 @@ function buildUserPrompt(payload) {
     payload.mode ? `写作模式：${buildModeDescription(payload.mode)}` : "",
     payload.expression_mode ? `表达处理：${buildExpressionRequirement(payload.expression_mode)}` : "",
     "",
-    promptVariant === PROMPT_VARIANTS.CLASSIC ? "" : buildLifeSliceStyleInstruction(),
+    (promptVariant !== PROMPT_VARIANTS.CLASSIC && !["analysis", "case_study", "listicle"].includes(payload.mode))
+      ? buildLifeSliceStyleInstruction() : "",
     "",
     "请直接输出最终 Markdown 成稿，不要输出分析过程。",
   ]
@@ -604,6 +663,18 @@ function getWechatConfig(payload) {
   };
 }
 
+function resolveTemperature(payload) {
+  const mode = payload?.mode || "standard";
+  const MODE_TEMPERATURES = {
+    story: 1.05,
+    standard: 0.95,
+    case_study: 0.9,
+    listicle: 0.9,
+    analysis: 0.85,
+  };
+  return MODE_TEMPERATURES[mode] ?? 0.95;
+}
+
 function buildArkRequestBody(payload, config) {
   const systemText = buildSystemPrompt(payload);
   const userText = buildUserPrompt(payload);
@@ -611,7 +682,7 @@ function buildArkRequestBody(payload, config) {
   const jsonPayload = {
     model: config.model,
     instructions: systemText,
-    temperature: 1.1,
+    temperature: resolveTemperature(payload),
     input: userText,
     ...(config.enableWebSearch ? { tools: [{ type: "web_search" }] } : {}),
   };
@@ -632,6 +703,7 @@ function buildResponsesRequestBody(payload, config) {
   return {
     model: config.model,
     stream: false,
+    temperature: resolveTemperature(payload),
     instructions: systemText,
     input: [
       {
@@ -665,7 +737,7 @@ function buildMimoChatRequestBody(payload, config) {
       },
     ],
     max_completion_tokens: 2048,
-    temperature: 1.0,
+    temperature: resolveTemperature(payload),
     top_p: 0.95,
     stream: false,
     stop: null,
@@ -747,8 +819,8 @@ function extractArticleMarkdown(data) {
   const chatMessageContent = data.choices?.[0]?.message?.content;
   const chatContent = Array.isArray(chatMessageContent)
     ? chatMessageContent
-        .map((item) => (typeof item === "string" ? item : item?.text || item?.content || ""))
-        .join("")
+      .map((item) => (typeof item === "string" ? item : item?.text || item?.content || ""))
+      .join("")
     : chatMessageContent || "";
   const messageOutput = data.output?.find((item) => item.type === "message") ?? data.output?.[0];
   const articleMd =
@@ -834,10 +906,10 @@ function buildTextGenerationError(status, data, text) {
   const code = String(error?.code || data?.code || `HTTP_${status}` || "UPSTREAM_ERROR").trim();
   const message = String(
     error?.message ||
-      data?.message ||
-      data?.error ||
-      text ||
-      "AI 接口调用失败",
+    data?.message ||
+    data?.error ||
+    text ||
+    "AI 接口调用失败",
   )
     .replace(/\s+/g, " ")
     .trim()
@@ -864,7 +936,8 @@ async function callTextGeneration(requestUrl, apiKey, requestBody) {
       body: JSON.stringify(requestBody),
     });
     text = await response.text();
-  } catch {
+  } catch (err) {
+    console.error("[callTextGeneration] fetch failed:", err);
     throw new Error(GEMINI_MODEL_ERROR_CODE);
   }
 
@@ -898,7 +971,7 @@ async function callTextGeneration(requestUrl, apiKey, requestBody) {
  * （有的句子很书面，有的句子很随意）。
  * 做法：~45%句子完全不动，~55%句子做重度改写 → 制造困惑度波动（burstiness）
  */
-function deAIStatisticalFingerprint(markdown) {
+export function deAIStatisticalFingerprint(markdown, payload) {
   if (!markdown || typeof markdown !== "string") return markdown;
 
   const rng = () => Math.random();
@@ -1194,7 +1267,7 @@ function deAIStatisticalFingerprint(markdown) {
     ["严重", ["不轻", "够受的"], /(?<=极|极其|非常|特别|十分|很)严重|严重(?=的)/gu],
     ["丰富多彩", ["花样繁多", "多姿多彩", "五花八门"]],
     ["偶尔", ["有时候", "偶尔也会"]],
-    
+
     // --- 新增口语化词汇 ---
     ["即使", ["就算", "哪怕"]],
     ["倘若", ["要是", "万一"]],
@@ -1323,24 +1396,31 @@ function deAIStatisticalFingerprint(markdown) {
     }
   }
 
-  let finalParagraphs = clampArticleParagraphsToMax(output, rng);
+  // 清除 sentinel 标记（防二次匹配用的零宽空格）—— 必须在 clamp 之前，防止截断时在不可见字符处断裂
+  const cleanedOutput = output.map(p => p.replace(/\u200B/g, ""));
+  const cleanedText = text.replace(/\u200B/g, "");
+
+  const { max: maxChars } = getArticleLengthLimit(payload?.length);
+  let finalParagraphs = clampArticleParagraphsToMax(cleanedOutput, rng, maxChars);
   if (finalParagraphs.length === 0) {
-    finalParagraphs = clampArticleParagraphsToMax([text], rng);
+    finalParagraphs = clampArticleParagraphsToMax([cleanedText], rng, maxChars);
   }
 
-  // 清除 sentinel 标记（防二次匹配用的零宽空格）
-  return finalParagraphs.join("\n\n").replace(/\u200B/g, "").trim();
-}function classicArticlePostprocess(markdown) {
-  return typeof markdown === "string" ? markdown.trim() : markdown;
+  return finalParagraphs.join("\n\n").trim();
+} export function classicArticlePostprocess(markdown, payload) {
+  const { max: maxChars } = getArticleLengthLimit(payload?.length);
+  return typeof markdown === "string"
+    ? clampArticleParagraphsToMax([markdown.trim()], Math.random, maxChars).join("\n\n").trim()
+    : markdown;
 }
 
-function postprocessArticleMarkdown(markdown, payload) {
+export function postprocessArticleMarkdown(markdown, payload) {
   const technicalAdjustedMarkdown = looksLikeTechnicalDoc(markdown)
     ? applyTechnicalDocStyleReplacements(markdown)
     : markdown;
   return resolvePromptVariant(payload) === PROMPT_VARIANTS.CLASSIC
-    ? classicArticlePostprocess(technicalAdjustedMarkdown)
-    : deAIStatisticalFingerprint(technicalAdjustedMarkdown);
+    ? classicArticlePostprocess(technicalAdjustedMarkdown, payload)
+    : deAIStatisticalFingerprint(technicalAdjustedMarkdown, payload);
 }
 
 export async function generateArticleContent(payload, userId = null) {
