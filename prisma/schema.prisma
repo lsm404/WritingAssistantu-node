@@ -274,3 +274,13 @@ model ArticleGenerationLog {
   @@index([kind])
   @@map("article_generation_logs")
 }
+
+model ActivationCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  isUsed    Boolean  @default(false) @map("is_used")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("activation_codes")
+}

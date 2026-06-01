@@ -174,6 +174,9 @@ const ERROR_MESSAGE_MAP = {
   WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED: "上传文章图片到微信失败",
   UPSTREAM_INVALID_JSON: "上游服务返回异常，请稍后再试",
   UPSTREAM_UNREACHABLE: "后端服务暂不可用，请稍后再试",
+  INVALID_ACTIVATION_CODE: "激活码不存在或无效",
+  ACTIVATION_CODE_ALREADY_USED: "该激活码已被使用",
+  ACTIVATION_CODE_GENERATION_FAILED: "激活码生成失败",
   DATABASE_URL_MISSING: "数据库连接未配置",
 };
 
@@ -1217,6 +1220,111 @@ const server = http.createServer(async (request, response) => {
         const message = error instanceof Error ? error.message : "FETCH_OPERATION_LOGS_FAILED";
         const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
         sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/v1/admin/activation-codes") {
+      try {
+        await requireAdminAccount(getAuthToken(request));
+        const activationCodes = await prisma.activationCode.findMany({
+          orderBy: { createdAt: "desc" },
+        });
+        sendJson(response, 200, { activationCodes });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "FORBIDDEN";
+        const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/v1/admin/activation-codes/generate") {
+      try {
+        await requireAdminAccount(getAuthToken(request));
+        let body;
+        try {
+          body = await readJsonBody(request);
+        } catch {
+          body = null;
+        }
+
+        const count = Math.max(1, Math.min(100, Number(body?.count || 10)));
+        const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        const { randomBytes } = await import("node:crypto");
+
+        function randomChunk(length) {
+          const bytes = randomBytes(length);
+          return Array.from(bytes, (byte) => CODE_CHARS[byte % CODE_CHARS.length]).join("");
+        }
+
+        const created = [];
+        for (let i = 0; i < count; i++) {
+          const code = `DEV-${randomChunk(4)}-${randomChunk(4)}`;
+          created.push({ code });
+        }
+
+        await prisma.activationCode.createMany({
+          data: created,
+          skipDuplicates: true,
+        });
+
+        const activationCodes = await prisma.activationCode.findMany({
+          where: { code: { in: created.map((c) => c.code) } },
+          orderBy: { createdAt: "desc" },
+        });
+
+        sendJson(response, 201, { ok: true, created: activationCodes });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "ACTIVATION_CODE_GENERATION_FAILED";
+        const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/v1/activation-codes/use") {
+      try {
+        let body;
+        try {
+          body = await readJsonBody(request);
+        } catch {
+          sendJson(response, 400, { error: "INVALID_JSON" });
+          return;
+        }
+
+        const rawCode = String(body?.code || "").trim().toUpperCase();
+        if (!rawCode) {
+          sendJson(response, 400, { error: "INVALID_ACTIVATION_CODE" });
+          return;
+        }
+
+        const record = await prisma.activationCode.findUnique({
+          where: { code: rawCode },
+        });
+
+        if (!record) {
+          sendJson(response, 400, { error: "INVALID_ACTIVATION_CODE" });
+          return;
+        }
+
+        if (record.isUsed) {
+          sendJson(response, 400, { error: "ACTIVATION_CODE_ALREADY_USED" });
+          return;
+        }
+
+        await prisma.activationCode.update({
+          where: { id: record.id },
+          data: {
+            isUsed: true,
+            usedAt: new Date(),
+          },
+        });
+
+        sendJson(response, 200, { ok: true, message: "激活成功" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "INTERNAL_SERVER_ERROR";
+        sendJson(response, 500, { error: message });
       }
       return;
     }

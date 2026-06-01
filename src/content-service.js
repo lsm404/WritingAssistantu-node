@@ -283,26 +283,10 @@ function splitArticleParagraphs(segment, rng = Math.random) {
 
 function clampArticleParagraphsToMax(segments, rng = Math.random, maxChars = ARTICLE_MAX_CHARS) {
   const normalized = [];
-  let total = 0;
 
   for (const raw of segments) {
     for (const segment of splitArticleParagraphs(raw, rng)) {
-      const currentLength = countArticleCharacters(segment);
-      if (total + currentLength <= maxChars) {
-        normalized.push(segment);
-        total += currentLength;
-        continue;
-      }
-
-      const remaining = maxChars - total;
-      if (remaining >= 80) {
-        const trimmed = normalizeArticleSegmentText(segment.slice(0, Math.max(0, remaining - 1)));
-        if (trimmed) {
-          normalized.push(trimmed);
-          total += countArticleCharacters(trimmed);
-        }
-      }
-      return normalized;
+      normalized.push(segment);
     }
   }
 

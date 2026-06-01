@@ -213,6 +213,16 @@ export async function ensureDatabaseSetup() {
     CREATE INDEX IF NOT EXISTS article_generation_logs_kind_idx
       ON article_generation_logs(kind)
   `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS activation_codes (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      code TEXT NOT NULL UNIQUE,
+      is_used BOOLEAN NOT NULL DEFAULT FALSE,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
 export function getDatabaseUrl() {
