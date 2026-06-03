@@ -1589,26 +1589,15 @@ function markdownToHtml(markdown) {
   let listItems = [];
   let inCode = false;
   let codeLines = [];
-  let pendingBlankLines = 0;
-
-  const flushBlankLines = () => {
-    if (pendingBlankLines <= 0) return;
-    for (let i = 0; i < pendingBlankLines; i += 1) {
-      html.push("<p><br /></p>");
-    }
-    pendingBlankLines = 0;
-  };
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    flushBlankLines();
     html.push(`<p>${renderInlineMarkdown(paragraph.join("<br />"))}</p>`);
     paragraph = [];
   };
 
   const flushList = () => {
     if (!listItems.length || !listType) return;
-    flushBlankLines();
     const items = listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("");
     html.push(`<${listType}>${items}</${listType}>`);
     listItems = [];
@@ -1617,7 +1606,6 @@ function markdownToHtml(markdown) {
 
   const flushCode = () => {
     if (!inCode) return;
-    flushBlankLines();
     html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
     inCode = false;
     codeLines = [];
@@ -1646,13 +1634,11 @@ function markdownToHtml(markdown) {
     if (!trimmed) {
       flushParagraph();
       flushList();
-      pendingBlankLines += 1;
       continue;
     }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
-      flushBlankLines();
       flushParagraph();
       flushList();
       const level = headingMatch[1].length;
@@ -1684,7 +1670,6 @@ function markdownToHtml(markdown) {
 
     const blockquoteMatch = trimmed.match(/^>\s?(.+)$/);
     if (blockquoteMatch) {
-      flushBlankLines();
       flushParagraph();
       flushList();
       html.push(`<blockquote><p>${renderInlineMarkdown(blockquoteMatch[1])}</p></blockquote>`);
@@ -1854,83 +1839,57 @@ async function replaceExternalImagesForWechat(html, accessToken, config) {
   return rewrittenParts.join("");
 }
 
+function appendInlineStyle(attributes = "", style = "") {
+  const normalizedAttributes = String(attributes || "");
+  const normalizedStyle = String(style || "").trim();
+  if (!normalizedStyle) return normalizedAttributes;
+
+  if (/\sstyle\s*=/i.test(normalizedAttributes)) {
+    return normalizedAttributes.replace(/\sstyle\s*=\s*(["'])(.*?)\1/i, (_match, quote, existingStyle) => {
+      const mergedStyle = `${String(existingStyle || "").trim().replace(/;?$/, ";")}${normalizedStyle}`;
+      return ` style=${quote}${mergedStyle}${quote}`;
+    });
+  }
+
+  return `${normalizedAttributes} style="${normalizedStyle}"`;
+}
+
+function inlineWechatBlockStyles(html) {
+  const stylesByTag = {
+    h1: "font-size:22px;font-weight:600;color:#111111;line-height:1.5;margin:1.5em 0 0.75em;text-align:left;",
+    h2: "font-size:20px;font-weight:600;color:#111111;line-height:1.5;margin:1.5em 0 0.75em;",
+    h3: "font-size:18px;font-weight:600;color:#111111;line-height:1.5;margin:1.5em 0 0.75em;",
+    h4: "font-size:17px;font-weight:600;color:#222222;line-height:1.55;margin:1.25em 0 0.65em;",
+    p: "margin:0 0 1em;line-height:1.9;text-align:left;letter-spacing:0;word-break:break-word;",
+    ul: "padding-left:1.4em;margin:0.9em 0;line-height:1.9;",
+    ol: "padding-left:1.4em;margin:0.9em 0;line-height:1.9;",
+    li: "margin-top:0.35em;",
+    blockquote: "border-left:3px solid #e6e6e6;padding-left:12px;color:#666666;margin:1.1em 0;",
+    img: "display:block;max-width:100%;height:auto;margin:1.2em auto;",
+    a: "color:#576b95;text-decoration:none;word-break:break-all;",
+    code: "background:#f5f5f5;padding:2px 4px;border-radius:3px;font-size:0.9em;",
+    pre: "background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto;",
+    strong: "color:#111111;",
+  };
+
+  return Object.entries(stylesByTag).reduce((currentHtml, [tag, style]) => {
+    const openTagPattern = new RegExp(`<${tag}\\b([^>]*)>`, "gi");
+    return currentHtml.replace(openTagPattern, (_match, attributes) => `<${tag}${appendInlineStyle(attributes, style)}>`);
+  }, String(html || ""));
+}
+
+function removeWechatBlankParagraphs(html) {
+  return String(html || "")
+    .replace(/<p\b[^>]*>\s*(?:<br\s*\/?>|&nbsp;|\s)*<\/p>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function wrapWechatHtml(contentHtml) {
+  const inlinedContentHtml = inlineWechatBlockStyles(removeWechatBlankParagraphs(contentHtml));
   return `
-<div class="openclaw-article" style="font-size:16px;line-height:1.9;color:#2c2c2c;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:12px 0;">
-  <style>
-    .openclaw-article h1, .openclaw-article h2, .openclaw-article h3 {
-      font-weight: 600;
-      color: #111111;
-      line-height: 1.5;
-      margin: 1.5em 0 0.75em;
-    }
-    .openclaw-article h1 {
-      font-size: 22px;
-      text-align: left;
-    }
-    .openclaw-article h2 {
-      font-size: 20px;
-      border-left: 4px solid #1890ff;
-      padding-left: 10px;
-    }
-    .openclaw-article h3 { font-size: 18px; }
-    .openclaw-article p {
-      margin: 1.05em 0 0;
-      line-height: 1.9;
-      text-align: justify;
-      letter-spacing: 0.02em;
-      word-break: break-word;
-    }
-    .openclaw-article p:first-child {
-      margin-top: 0;
-    }
-    .openclaw-article p br {
-      display: block;
-      margin-top: 0.9em;
-    }
-    .openclaw-article ul, .openclaw-article ol {
-      padding-left: 1.4em;
-      margin: 0.9em 0;
-      line-height: 1.9;
-    }
-    .openclaw-article li + li {
-      margin-top: 0.35em;
-    }
-    .openclaw-article strong { color: #111111; }
-    .openclaw-article blockquote {
-      border-left: 3px solid #e6e6e6;
-      padding-left: 12px;
-      color: #666666;
-      margin: 1.1em 0;
-    }
-    .openclaw-article blockquote p {
-      margin-top: 0.6em;
-    }
-    .openclaw-article img {
-      display: block;
-      max-width: 100%;
-      height: auto;
-      margin: 1.2em auto;
-    }
-    .openclaw-article a {
-      color: #576b95;
-      text-decoration: none;
-      word-break: break-all;
-    }
-    .openclaw-article code {
-      background: #f5f5f5;
-      padding: 2px 4px;
-      border-radius: 3px;
-      font-size: 0.9em;
-    }
-    .openclaw-article pre {
-      background: #f5f5f5;
-      padding: 12px;
-      border-radius: 6px;
-      overflow-x: auto;
-    }
-  </style>
-  ${contentHtml}
+<div style="font-size:16px;line-height:1.9;color:#2c2c2c;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:12px 0;">
+  ${inlinedContentHtml}
 </div>
 `.trim();
 }
