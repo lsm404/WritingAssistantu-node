@@ -14,7 +14,9 @@ export const TEXT_MODEL_PROVIDERS = {
 };
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro";
 
 const TEXT_SETTING_KEYS = {
   provider: "text_provider",
@@ -52,9 +54,9 @@ const TEXT_PROVIDER_DEFAULTS = {
     baseUrl: () => process.env.ARK_BASE_URL?.trim() || DEFAULT_ARK_BASE_URL,
   },
   [TEXT_MODEL_PROVIDERS.DEEPSEEK]: {
-    apiKey: () => process.env.ARK_DEEPSEEK_API_KEY?.trim() || "",
-    model: () => process.env.ARK_DEEPSEEK_MODEL?.trim() || "deepseek-v3-2-251201",
-    baseUrl: () => process.env.ARK_DEEPSEEK_BASE_URL?.trim() || process.env.ARK_BASE_URL?.trim() || DEFAULT_ARK_BASE_URL,
+    apiKey: () => process.env.DEEPSEEK_API_KEY?.trim() || process.env.ARK_DEEPSEEK_API_KEY?.trim() || "",
+    model: () => process.env.DEEPSEEK_MODEL?.trim() || DEFAULT_DEEPSEEK_MODEL,
+    baseUrl: () => process.env.DEEPSEEK_BASE_URL?.trim() || DEFAULT_DEEPSEEK_BASE_URL,
   },
   [TEXT_MODEL_PROVIDERS.KIMI]: {
     apiKey: () => process.env.ARK_KIMI_API_KEY?.trim() || "",
@@ -100,11 +102,30 @@ function getTextSettingKeys() {
 function readTextProviderSettings(provider, stored) {
   const keys = TEXT_PROVIDER_SETTING_KEYS[provider];
   const defaults = TEXT_PROVIDER_DEFAULTS[provider];
+  const storedModel = stored[keys.model] || "";
+  const storedBaseUrl = stored[keys.baseUrl] || "";
+
+  if (provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
+    const normalizedStoredModel = storedModel.trim().toLowerCase();
+    const normalizedStoredBaseUrl = storedBaseUrl.trim().toLowerCase();
+
+    return {
+      apiKey: stored[keys.apiKey] || defaults.apiKey(),
+      model:
+        normalizedStoredModel === "deepseek-v3-2-251201"
+          ? defaults.model()
+          : storedModel || defaults.model(),
+      baseUrl:
+        normalizedStoredBaseUrl.includes("ark.cn-beijing.volces.com")
+          ? defaults.baseUrl()
+          : storedBaseUrl || defaults.baseUrl(),
+    };
+  }
 
   return {
     apiKey: stored[keys.apiKey] || defaults.apiKey(),
-    model: stored[keys.model] || defaults.model(),
-    baseUrl: stored[keys.baseUrl] || defaults.baseUrl(),
+    model: storedModel || defaults.model(),
+    baseUrl: storedBaseUrl || defaults.baseUrl(),
   };
 }
 

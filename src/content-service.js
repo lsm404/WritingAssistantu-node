@@ -15,6 +15,7 @@ import {
 } from "./aigc-lexicon.js";
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1";
 const DEFAULT_WECHAT_BASE_URL = "https://api.weixin.qq.com";
 const GEMINI_MODEL_ERROR_CODE = "GEMINI_MODEL_CONNECTING";
@@ -188,9 +189,9 @@ const LENGTH_DESCRIPTIONS = {
   long: buildStrictArticleLengthDescription("long"),
 };
 const CLASSIC_LENGTH_DESCRIPTIONS = {
-  short: "偏短，约 500-800 字。",
-  medium: "中等长度，约 800-1500 字。",
-  long: "偏长，约 1500 字以上。",
+  short: "偏短，约 300-500 字。",
+  medium: "中等长度，约 600-900 字。",
+  long: "偏长，约 1000-1500 字。",
 };
 const MODE_DESCRIPTIONS = {
   standard: "标准公众号干货文章。",
@@ -227,6 +228,10 @@ function getVariantFormatInstruction(variant, length) {
   return variant === PROMPT_VARIANTS.CLASSIC
     ? ""
     : buildArticleFormatInstructionWithStyle(length);
+}
+
+function preserveArticleMarkdownFormat(markdown) {
+  return typeof markdown === "string" ? markdown.trim() : markdown;
 }
 
 function normalizeArticleSegmentText(segment) {
@@ -733,6 +738,46 @@ function buildMimoChatRequestBody(payload, config) {
   };
 }
 
+function resolveDeepSeekReasoningEffort(reasoningEffort) {
+  if (reasoningEffort === "max" || reasoningEffort === "xhigh") {
+    return "max";
+  }
+  if (reasoningEffort === "minimal") {
+    return "";
+  }
+  return "high";
+}
+
+function buildDeepSeekChatRequestBody(payload, config) {
+  const systemText = buildSystemPrompt(payload);
+  const userText = buildUserPrompt(payload);
+  const reasoningEffort = resolveDeepSeekReasoningEffort(config.reasoningEffort);
+  const requestBody = {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content: systemText,
+      },
+      {
+        role: "user",
+        content: userText,
+      },
+    ],
+    temperature: resolveTemperature(payload),
+    thinking: {
+      type: reasoningEffort ? "enabled" : "disabled",
+    },
+    stream: false,
+  };
+
+  if (reasoningEffort) {
+    requestBody.reasoning_effort = reasoningEffort;
+  }
+
+  return requestBody;
+}
+
 function buildArkEndpointUrl(baseUrl, endpoint) {
   const trimmed = String(baseUrl || DEFAULT_ARK_BASE_URL).trim().replace(/\/+$/, "");
   const normalizedEndpoint = endpoint.replace(/^\/+/, "");
@@ -754,6 +799,15 @@ function buildMimoEndpointUrl(baseUrl) {
   return `${withoutKnownEndpoint}/chat/completions`;
 }
 
+function buildDeepSeekEndpointUrl(baseUrl) {
+  const trimmed = String(baseUrl || DEFAULT_DEEPSEEK_BASE_URL).trim().replace(/\/+$/, "");
+  if (trimmed.endsWith("/chat/completions")) {
+    return trimmed;
+  }
+  const withoutKnownEndpoint = trimmed.replace(/\/(?:v1\/)?chat\/completions$/u, "");
+  return `${withoutKnownEndpoint}/chat/completions`;
+}
+
 function buildTextGenerationRequest(payload, config) {
   if (config.provider === TEXT_MODEL_PROVIDERS.MIMO) {
     return {
@@ -765,9 +819,9 @@ function buildTextGenerationRequest(payload, config) {
 
   if (config.provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
     return {
-      requestUrl: buildArkEndpointUrl(config.baseUrl, "responses"),
-      requestBody: buildResponsesRequestBody(payload, config),
-      logKind: "text/responses",
+      requestUrl: buildDeepSeekEndpointUrl(config.baseUrl),
+      requestBody: buildDeepSeekChatRequestBody(payload, config),
+      logKind: "text/deepseek/chat-completions",
     };
   }
 
@@ -1392,10 +1446,7 @@ export function deAIStatisticalFingerprint(markdown, payload) {
 
   return finalParagraphs.join("\n\n").trim();
 } export function classicArticlePostprocess(markdown, payload) {
-  const { max: maxChars } = getArticleLengthLimit(payload?.length);
-  return typeof markdown === "string"
-    ? clampArticleParagraphsToMax([markdown.trim()], Math.random, maxChars).join("\n\n").trim()
-    : markdown;
+  return preserveArticleMarkdownFormat(markdown);
 }
 
 export function postprocessArticleMarkdown(markdown, payload) {
@@ -1404,7 +1455,7 @@ export function postprocessArticleMarkdown(markdown, payload) {
     : markdown;
   return resolvePromptVariant(payload) === PROMPT_VARIANTS.CLASSIC
     ? classicArticlePostprocess(technicalAdjustedMarkdown, payload)
-    : deAIStatisticalFingerprint(technicalAdjustedMarkdown, payload);
+    : preserveArticleMarkdownFormat(technicalAdjustedMarkdown);
 }
 
 export async function generateArticleContent(payload, userId = null) {
@@ -1506,7 +1557,14 @@ function stripLeadingTitleHeading(markdown) {
 }
 
 function renderInlineMarkdown(text) {
-  return escapeHtml(text)
+  const restoreSafeEditorSpans = (value) =>
+    value
+      .replace(/&lt;(\/?u)&gt;/g, "<$1>")
+      .replace(
+        /&lt;span\s+style=&quot;((?:color|background-color):#[0-9a-fA-F]{3,6}|font-size:(?:14|16|18|20|24)px)&quot;&gt;([\s\S]*?)&lt;\/span&gt;/g,
+        '<span style="$1">$2</span>',
+      );
+  return restoreSafeEditorSpans(escapeHtml(text)
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, src) => {
       const safeAlt = escapeHtml(String(alt || "").trim());
       const safeSrc = String(src || "").trim();
@@ -1520,7 +1578,7 @@ function renderInlineMarkdown(text) {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/&lt;br\s*\/?&gt;/gi, "<br />");
+    .replace(/&lt;br\s*\/?&gt;/gi, "<br />"));
 }
 
 function markdownToHtml(markdown) {
@@ -1709,6 +1767,41 @@ async function uploadWechatArticleImageFromUrl(imageUrl, accessToken, config) {
   return data.url;
 }
 
+async function uploadWechatArticleImageFromDataUrl(dataUrl, accessToken, config) {
+  const normalizedImageUrl = decodeHtmlEntities(dataUrl);
+  const match = normalizedImageUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error("WECHAT_ARTICLE_IMAGE_INVALID_CONTENT_TYPE:data-url");
+  }
+
+  const [, contentType, base64] = match;
+  const imageBuffer = Buffer.from(base64, "base64");
+  if (!imageBuffer.length) {
+    throw new Error("WECHAT_ARTICLE_IMAGE_FETCH_FAILED:empty-data-url");
+  }
+
+  const imageBlob = new Blob([imageBuffer], { type: contentType });
+  const formData = new FormData();
+  formData.append("media", imageBlob, guessFilenameFromUrl("local-image", contentType));
+
+  const url = new URL(`${config.baseUrl.replace(/\/$/, "")}/cgi-bin/media/uploadimg`);
+  url.search = new URLSearchParams({
+    access_token: accessToken,
+  }).toString();
+
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.url) {
+    throw new Error(data.errmsg || data.message || `WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED:${data.errcode || response.status}`);
+  }
+
+  return data.url;
+}
+
 async function replaceExternalImagesForWechat(html, accessToken, config) {
   const imageSrcPattern = /(<img\b[^>]*?\bsrc\s*=\s*)(["'])(.*?)\2/gi;
   const seen = new Map();
@@ -1728,7 +1821,16 @@ async function replaceExternalImagesForWechat(html, accessToken, config) {
     const src = String(rawSrc || "").trim();
     let replacementSrc = src;
 
-    if (/^https?:\/\//i.test(src) && !isWechatHostedImageUrl(src)) {
+    if (/^data:image\//i.test(src)) {
+      if (!seen.has(src)) {
+        seen.set(src, uploadWechatArticleImageFromDataUrl(src, accessToken, config));
+      }
+      try {
+        replacementSrc = await seen.get(src);
+      } catch (error) {
+        throw error instanceof Error ? error : new Error("WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED");
+      }
+    } else if (/^https?:\/\//i.test(src) && !isWechatHostedImageUrl(src)) {
       if (!seen.has(src)) {
         seen.set(src, uploadWechatArticleImageFromUrl(src, accessToken, config));
       }

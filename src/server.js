@@ -70,6 +70,7 @@ import { getUserWechatAccounts, replaceUserWechatAccounts } from "./wechat-accou
 
 const PORT = Number(process.env.PORT || 3100);
 const WECHAT_COVER_MAX_BYTES = 5 * 1024 * 1024;
+const JSON_BODY_MAX_BYTES = 12 * 1024 * 1024;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const GEMINI_MODEL_CONNECTING_MESSAGE = "Gemini模型连接中，稍后再试.......";
@@ -379,7 +380,7 @@ function readJsonBody(request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       chunks.push(buffer);
       size += buffer.length;
-      if (size > 1024 * 1024) {
+      if (size > JSON_BODY_MAX_BYTES) {
         rejected = true;
         reject(new Error("BODY_TOO_LARGE"));
       }
@@ -718,7 +719,7 @@ const server = http.createServer(async (request, response) => {
         const message = error instanceof Error ? error.message : "WECHAT_UPLOAD_FAILED";
         const statusCode =
           message === "WECHAT_APPID_MISSING" || message === "WECHAT_APPSECRET_MISSING" ? 400 : 500;
-        sendJson(response, statusCode, { error: message });
+        sendJson(response, statusCode, { error: message, detail: message });
       }
       return;
     }
@@ -748,7 +749,7 @@ const server = http.createServer(async (request, response) => {
             message === "WECHAT_THUMB_MEDIA_ID_MISSING"
             ? 400
             : 500;
-        sendJson(response, statusCode, { error: message });
+        sendJson(response, statusCode, { error: message, detail: message });
       }
       return;
     }
