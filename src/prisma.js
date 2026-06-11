@@ -215,6 +215,31 @@ export async function ensureDatabaseSetup() {
   `);
 
   await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS ai_call_logs (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      source TEXT NOT NULL DEFAULT 'unknown',
+      endpoint TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'success',
+      style TEXT,
+      max_chars INT,
+      input_chars INT NOT NULL DEFAULT 0,
+      output_chars INT NOT NULL DEFAULT 0,
+      model TEXT,
+      error_code TEXT,
+      client_ip TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS ai_call_logs_source_created_at_idx
+      ON ai_call_logs(source, created_at)
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS ai_call_logs_status_idx
+      ON ai_call_logs(status)
+  `);
+
+  await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS activation_codes (
       id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
       code TEXT NOT NULL UNIQUE,

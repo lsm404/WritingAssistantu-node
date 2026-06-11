@@ -10,6 +10,7 @@ import {
   ensureWechatAccountTransportKeys,
   getWechatAccountTransportPublicKeyPem,
 } from "./wechat-account-transport-crypto.js";
+import { getAiCallStats, recordAiCallLog } from "./ai-call-stats-service.js";
 import {
   adminDeleteUser,
   adminSetUserStatus,
@@ -23,7 +24,14 @@ import {
   requireUser,
   updateUserModelConfig,
 } from "./auth-service.js";
-import { createWechatDraft, generateArticleContent, generateImageContent, uploadWechatThumbMedia } from "./content-service.js";
+import {
+  createWechatDraft,
+  generateArticleContent,
+  generateImageContent,
+  generateMiniappCopyContent,
+  getMiniappCopyStyles,
+  uploadWechatThumbMedia,
+} from "./content-service.js";
 import {
   exportLicenses,
   generateLicenses,
@@ -120,6 +128,9 @@ const ERROR_MESSAGE_MAP = {
   PROMPT_NOT_FOUND: "提示词不存在",
   NO_VALID_UPDATES: "没有可更新的内容",
   INVALID_BODY: "请求内容不正确",
+  MINIAPP_INPUT_REQUIRED: "请先输入需要润色的文案",
+  MINIAPP_INPUT_TOO_LONG: "文案过长，请删减后再生成",
+  MINIAPP_STYLE_INVALID: "文案风格参数不正确",
   ACCOUNTS_REQUIRED: "公众号账号列表不能为空",
   ACCOUNT_NAME_AND_ID_REQUIRED: "公众号账号名称和 AppID 不能为空",
   APP_SECRET_PLAINTEXT_FORBIDDEN: "AppSecret 必须加密传输",
@@ -692,6 +703,73 @@ const server = http.createServer(async (request, response) => {
               message === "ARK_IMAGE_MODEL_MISSING"
               ? 400
               : 500;
+        sendJson(response, statusCode, { error: message });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/v1/miniapp/copy/styles") {
+      sendJson(response, 200, { styles: getMiniappCopyStyles(), lengthOptions: [50, 100, 200, 300], maxChars: 500 });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/v1/miniapp/copy/generate") {
+      let body;
+      try {
+        body = await readJsonBody(request);
+      } catch (error) {
+        if (error instanceof Error && error.message === "INVALID_JSON") {
+          sendJson(response, 400, { error: "INVALID_JSON" });
+          return;
+        }
+        if (error instanceof Error && error.message === "BODY_TOO_LARGE") {
+          sendJson(response, 413, { error: "BODY_TOO_LARGE" });
+          return;
+        }
+        throw error;
+      }
+
+      try {
+        const result = await generateMiniappCopyContent(body ?? {});
+        await recordAiCallLog({
+          source: "miniapp",
+          endpoint: pathname,
+          status: "success",
+          style: body?.style,
+          maxChars: result.maxChars ?? body?.maxChars ?? body?.max_chars,
+          inputChars: [...String(body?.inputText ?? body?.text ?? body?.content ?? "")].length,
+          outputChars: [...String(result.resultText || "")].length,
+          model: result.meta?.model,
+          clientIp: getClientIpFromRequest(request),
+        }).catch((logError) => console.error("[miniapp/copy/generate] log failed:", logError));
+        sendJson(response, 200, { ...result, remainCount: null });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "ARTICLE_GENERATE_FAILED";
+        console.error("[miniapp/copy/generate] failed:", error);
+        await recordAiCallLog({
+          source: "miniapp",
+          endpoint: pathname,
+          status: "failed",
+          style: body?.style,
+          maxChars: body?.maxChars ?? body?.max_chars,
+          inputChars: [...String(body?.inputText ?? body?.text ?? body?.content ?? "")].length,
+          errorCode: message,
+          clientIp: getClientIpFromRequest(request),
+        }).catch((logError) => console.error("[miniapp/copy/generate] log failed:", logError));
+        const statusCode =
+          message === "MINIAPP_INPUT_REQUIRED" ||
+          message === "MINIAPP_INPUT_TOO_LONG" ||
+          message === "MINIAPP_STYLE_INVALID" ||
+          message === "ARK_API_KEY_MISSING" ||
+          message === "ARK_MODEL_MISSING" ||
+          message === "ARK_DEEPSEEK_API_KEY_MISSING" ||
+          message === "ARK_DEEPSEEK_MODEL_MISSING" ||
+          message === "ARK_KIMI_API_KEY_MISSING" ||
+          message === "ARK_KIMI_MODEL_MISSING" ||
+          message === "MIMO_API_KEY_MISSING" ||
+          message === "MIMO_MODEL_MISSING"
+            ? 400
+            : 500;
         sendJson(response, statusCode, { error: message });
       }
       return;
@@ -1661,6 +1739,18 @@ const server = http.createServer(async (request, response) => {
       } catch (error) {
         const message = error instanceof Error ? error.message : "UPDATE_AGENT_PROFILE_FAILED";
         sendJson(response, message === "UNAUTHORIZED" ? 401 : 400, { error: message });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/v1/admin/ai-call-stats") {
+      try {
+        await requireSuperAdmin(getAuthToken(request));
+        sendJson(response, 200, await getAiCallStats());
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "FETCH_AI_CALL_STATS_FAILED";
+        const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+        sendJson(response, statusCode, { error: message });
       }
       return;
     }

@@ -1202,6 +1202,246 @@ export async function generateArticleContent(payload, userId = null) {
   };
 }
 
+const MINIAPP_COPY_STYLES = {
+  funny: {
+    name: "幽默",
+    instruction:
+      "改成轻松、机灵、有笑点的表达。可以有少量网络感和自嘲感，但不要低俗、不要硬塞段子，不要让信息失真。",
+  },
+  sincere: {
+    name: "真诚",
+    instruction:
+      "改成自然、走心、可信的表达。像认真分享自己的真实感受，少用夸张形容，多保留生活细节和朴素情绪。",
+  },
+  professional: {
+    name: "专业",
+    instruction:
+      "改成清晰、克制、有条理的表达。突出重点、价值和可信度，避免官腔、空话、过度营销和复杂术语堆叠。",
+  },
+  poetry: {
+    name: "诗词",
+    instruction:
+      "改成有古风雅韵和画面感的表达。可以少量化用诗词意象，但不要堆砌生僻词，不要编造具体诗句出处。",
+  },
+  aesthetic: {
+    name: "唯美",
+    instruction:
+      "改成温柔、细腻、有画面感的表达。语言要治愈、柔和、有氛围，但不要空泛抒情或过度堆叠形容词。",
+  },
+  romantic: {
+    name: "浪漫",
+    instruction:
+      "改成温柔心动、有情绪张力的表达。可以带一点告白感和仪式感，但不要油腻、不要尴尬夸张。",
+  },
+};
+
+function normalizeMiniappCopyStyle(style) {
+  const key = String(style || "sincere").trim();
+  if (!Object.prototype.hasOwnProperty.call(MINIAPP_COPY_STYLES, key)) {
+    throw new Error("MINIAPP_STYLE_INVALID");
+  }
+  return key;
+}
+
+function normalizeMiniappMaxChars(value) {
+  const n = Number(value || 500);
+  if (!Number.isFinite(n) || n <= 0) {
+    return 500;
+  }
+  return Math.min(Math.max(Math.floor(n), 50), 500);
+}
+
+function stripMiniappCopyWrapper(text) {
+  return String(text || "")
+    .replace(/^```(?:\w+)?\s*/u, "")
+    .replace(/\s*```$/u, "")
+    .replace(/^\s*(?:润色结果|结果|文案)[:：]\s*/u, "")
+    .trim();
+}
+
+function clampMiniappCopyText(text, maxChars) {
+  const value = stripMiniappCopyWrapper(text);
+  const chars = [...value];
+  if (chars.length <= maxChars) {
+    return value;
+  }
+
+  const sliced = chars.slice(0, maxChars).join("").trim();
+  const boundary = Math.max(
+    sliced.lastIndexOf("。"),
+    sliced.lastIndexOf("！"),
+    sliced.lastIndexOf("？"),
+    sliced.lastIndexOf("\n"),
+  );
+  if (boundary >= Math.floor(maxChars * 0.62)) {
+    return sliced.slice(0, boundary + 1).trim();
+  }
+  return sliced.replace(/[，、；：,.!?！？;:]*$/u, "").trim();
+}
+
+function buildMiniappCopyPrompt(inputText, styleConfig, maxChars) {
+  return [
+    "你是一个微信小程序里的中文文案润色助手。",
+    "任务：把用户输入的原始文案润色成可直接复制发布的一版成稿。",
+    "",
+    `目标风格：${styleConfig.name}`,
+    `风格提示词：${styleConfig.instruction}`,
+    "",
+    "硬性要求：",
+    `1. 输出总字数必须小于等于 ${maxChars} 字。`,
+    "2. 只输出润色后的文案，不要解释，不要给标题，不要写“润色结果”。",
+    "3. 保留原文核心意思，不新增具体事实、价格、地点、品牌、数据或人物经历。",
+    "4. 可以自然分段，可以少量使用 emoji，但不要密集堆叠。",
+    "5. 不要出现违法、低俗、攻击性、虚假承诺或医疗金融等高风险断言。",
+    "",
+    "原始文案：",
+    inputText,
+  ].join("\n");
+}
+
+function buildMiniappCopyRequestBody(inputText, styleConfig, maxChars, config) {
+  const userText = buildMiniappCopyPrompt(inputText, styleConfig, maxChars);
+  const systemText =
+    "你擅长把中文日常文案润色得更适合社交平台发布。输出要自然、克制、可直接复制。";
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.MIMO) {
+    return {
+      model: config.model,
+      messages: [
+        { role: "system", content: systemText },
+        { role: "user", content: userText },
+      ],
+      max_completion_tokens: 900,
+      temperature: 0.85,
+      top_p: 0.9,
+      stream: false,
+      stop: null,
+      frequency_penalty: 0,
+      presence_penalty: 0,
+      thinking: { type: "disabled" },
+    };
+  }
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
+    return {
+      model: config.model,
+      messages: [
+        { role: "system", content: systemText },
+        { role: "user", content: userText },
+      ],
+      temperature: 0.85,
+      thinking: { type: "disabled" },
+      stream: false,
+    };
+  }
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.KIMI) {
+    return {
+      model: config.model,
+      stream: false,
+      temperature: 0.85,
+      instructions: systemText,
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: userText }],
+        },
+      ],
+    };
+  }
+
+  return {
+    model: config.model,
+    instructions: systemText,
+    temperature: 0.85,
+    input: userText,
+  };
+}
+
+function buildMiniappCopyGenerationRequest(inputText, styleConfig, maxChars, config) {
+  const requestBody = buildMiniappCopyRequestBody(inputText, styleConfig, maxChars, config);
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.MIMO) {
+    return {
+      requestUrl: buildMimoEndpointUrl(config.baseUrl),
+      requestBody,
+      logKind: "miniapp-copy/mimo/chat-completions",
+    };
+  }
+
+  if (config.provider === TEXT_MODEL_PROVIDERS.DEEPSEEK) {
+    return {
+      requestUrl: buildDeepSeekEndpointUrl(config.baseUrl),
+      requestBody,
+      logKind: "miniapp-copy/deepseek/chat-completions",
+    };
+  }
+
+  return {
+    requestUrl: buildArkEndpointUrl(config.baseUrl, "responses"),
+    requestBody,
+    logKind: "miniapp-copy/responses",
+  };
+}
+
+export function getMiniappCopyStyles() {
+  return Object.entries(MINIAPP_COPY_STYLES).map(([key, item]) => ({
+    key,
+    name: item.name,
+  }));
+}
+
+export async function generateMiniappCopyContent(payload) {
+  const inputText = String(payload?.inputText ?? payload?.text ?? payload?.content ?? "").trim();
+  if (!inputText) {
+    throw new Error("MINIAPP_INPUT_REQUIRED");
+  }
+  if ([...inputText].length > 2000) {
+    throw new Error("MINIAPP_INPUT_TOO_LONG");
+  }
+
+  const style = normalizeMiniappCopyStyle(payload?.style);
+  const styleConfig = MINIAPP_COPY_STYLES[style];
+  const maxChars = normalizeMiniappMaxChars(payload?.maxChars ?? payload?.max_chars);
+  const config = await getGenerationConfig({ enable_web_search: false });
+  const { requestUrl, requestBody, logKind } = buildMiniappCopyGenerationRequest(
+    inputText,
+    styleConfig,
+    maxChars,
+    config,
+  );
+
+  logOutgoingAiCall(logKind, {
+    url: requestUrl,
+    provider: config.provider,
+    authorizationBearer: maskSecret(config.apiKey),
+    requestBody,
+    clientPayloadSummary: {
+      style,
+      inputChars: [...inputText].length,
+      maxChars,
+    },
+  });
+
+  const data = await callTextGeneration(requestUrl, config.apiKey, requestBody);
+  const resultText = clampMiniappCopyText(extractArticleMarkdown(data), maxChars);
+  if (!resultText) {
+    throw new Error("ARTICLE_EMPTY");
+  }
+
+  return {
+    ok: true,
+    id: `miniapp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    resultText,
+    style,
+    styleName: styleConfig.name,
+    maxChars,
+    meta: {
+      model: data.model || config.model,
+    },
+  };
+}
+
 async function getWechatAccessToken(config) {
   const now = Date.now();
   const sameCredential = tokenCache.appId === config.appId && tokenCache.appSecret === config.appSecret;
@@ -1482,8 +1722,36 @@ async function uploadWechatArticleImageFromDataUrl(dataUrl, accessToken, config)
   return data.url;
 }
 
+async function resolveWechatArticleImageSrc(src, seen, accessToken, config) {
+  const normalizedSrc = String(src || "").trim();
+  if (/^data:image\//i.test(normalizedSrc)) {
+    if (!seen.has(normalizedSrc)) {
+      seen.set(normalizedSrc, uploadWechatArticleImageFromDataUrl(normalizedSrc, accessToken, config));
+    }
+    try {
+      return await seen.get(normalizedSrc);
+    } catch (error) {
+      throw error instanceof Error ? error : new Error("WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED");
+    }
+  }
+
+  if (/^https?:\/\//i.test(normalizedSrc) && !isWechatHostedImageUrl(normalizedSrc)) {
+    if (!seen.has(normalizedSrc)) {
+      seen.set(normalizedSrc, uploadWechatArticleImageFromUrl(normalizedSrc, accessToken, config));
+    }
+    try {
+      return await seen.get(normalizedSrc);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED";
+      throw new Error(`${message}:${normalizedSrc}`);
+    }
+  }
+
+  return normalizedSrc;
+}
+
 async function replaceExternalImagesForWechat(html, accessToken, config) {
-  const imageSrcPattern = /(<img\b[^>]*?\bsrc\s*=\s*)(["'])(.*?)\2/gi;
+  const imageAttrPattern = /(<(?:img|image)\b[^>]*?\b(?:src|href|xlink:href)\s*=\s*)(["'])(.*?)\2/gi;
   const seen = new Map();
   let hadMatch = false;
 
@@ -1491,7 +1759,7 @@ async function replaceExternalImagesForWechat(html, accessToken, config) {
   let lastIndex = 0;
   let match;
 
-  while ((match = imageSrcPattern.exec(html)) !== null) {
+  while ((match = imageAttrPattern.exec(html)) !== null) {
     hadMatch = true;
     const [fullMatch, prefix, quote, rawSrc] = match;
     const matchStart = match.index;
@@ -1499,28 +1767,7 @@ async function replaceExternalImagesForWechat(html, accessToken, config) {
     rewrittenParts.push(html.slice(lastIndex, matchStart));
 
     const src = String(rawSrc || "").trim();
-    let replacementSrc = src;
-
-    if (/^data:image\//i.test(src)) {
-      if (!seen.has(src)) {
-        seen.set(src, uploadWechatArticleImageFromDataUrl(src, accessToken, config));
-      }
-      try {
-        replacementSrc = await seen.get(src);
-      } catch (error) {
-        throw error instanceof Error ? error : new Error("WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED");
-      }
-    } else if (/^https?:\/\//i.test(src) && !isWechatHostedImageUrl(src)) {
-      if (!seen.has(src)) {
-        seen.set(src, uploadWechatArticleImageFromUrl(src, accessToken, config));
-      }
-      try {
-        replacementSrc = await seen.get(src);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "WECHAT_ARTICLE_IMAGE_UPLOAD_FAILED";
-        throw new Error(`${message}:${src}`);
-      }
-    }
+    const replacementSrc = await resolveWechatArticleImageSrc(src, seen, accessToken, config);
 
     rewrittenParts.push(`${prefix}${quote}${replacementSrc}${quote}`);
     lastIndex = matchEnd;
@@ -1541,7 +1788,7 @@ function appendInlineStyle(attributes = "", style = "") {
 
   if (/\sstyle\s*=/i.test(normalizedAttributes)) {
     return normalizedAttributes.replace(/\sstyle\s*=\s*(["'])(.*?)\1/i, (_match, quote, existingStyle) => {
-      const mergedStyle = `${String(existingStyle || "").trim().replace(/;?$/, ";")}${normalizedStyle}`;
+      const mergedStyle = `${normalizedStyle}${String(existingStyle || "").trim().replace(/;?$/, ";")}`;
       return ` style=${quote}${mergedStyle}${quote}`;
     });
   }
