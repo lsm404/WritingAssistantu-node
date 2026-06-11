@@ -688,7 +688,7 @@ const server = http.createServer(async (request, response) => {
         await assertUserQuotaAvailable(auth.user.id, membership, "image", Number(body?.n || 1));
         const result = await generateImageContent({
           ...(body ?? {}),
-          watermark: membership?.isActive ? body?.watermark : true,
+          watermark: membership?.isActive ? (body?.watermark ?? false) : true,
         });
         const quota = await consumeUserQuota(auth.user.id, membership, "image", Number(body?.n || 1));
         sendJson(response, 200, { ...result, quota });
@@ -1600,12 +1600,22 @@ const server = http.createServer(async (request, response) => {
 
       if (method === "DELETE") {
         try {
-          await requireSuperAdmin(getAuthToken(request));
+          await requireMembershipGrantPermission(getAuthToken(request), userId);
           const result = await adminRevokeMembership(userId);
           sendJson(response, 200, { ok: true, ...result });
         } catch (error) {
           const message = error instanceof Error ? error.message : "REVOKE_FAILED";
-          const statusCode = message === "UNAUTHORIZED" ? 401 : message === "FORBIDDEN" ? 403 : 500;
+          const statusCode =
+            message === "UNAUTHORIZED"
+              ? 401
+              : message === "FORBIDDEN" ||
+                message === "AGENT_RECORD_NOT_FOUND" ||
+                message === "AGENT_DISABLED" ||
+                message === "AGENT_GRANT_MEMBERSHIP_DISABLED"
+                ? 403
+                : message === "USER_NOT_FOUND"
+                  ? 404
+                  : 500;
           sendJson(response, statusCode, { error: message });
         }
         return;
