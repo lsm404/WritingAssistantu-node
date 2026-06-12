@@ -11,12 +11,11 @@ RUN npm ci
 # 复制项目源代码
 COPY . .
 
-# 生成 Prisma Client（建表在容器启动时用 db push，见 CMD）
+# 生成 Prisma Client
 RUN npx prisma generate
 
 # 暴露端口
 EXPOSE 3100
 
-# 每次启动先把 schema 同步到数据库（本项目未提交 migrate 历史，线上用 db push）
-# 注意：重启 Docker 只会重启进程，不会自动改库结构，必须执行这类命令或由这里代为执行
-CMD ["sh", "-c", "npx prisma db push --skip-generate && npm run start"]
+# 生产环境只负责启动应用；数据库变更在部署流程中单独执行
+CMD ["npm", "run", "start"]

@@ -637,7 +637,9 @@ const server = http.createServer(async (request, response) => {
         await assertUserQuotaAvailable(auth.user.id, membership, quotaKind, 1);
         const result = await generateArticleContent(body ?? {}, auth.user.id);
         const quota = await consumeUserQuota(auth.user.id, membership, quotaKind, 1);
-        await recordArticleGenerationLog(auth.user.id, body ?? {}, result, quotaKind);
+        recordArticleGenerationLog(auth.user.id, body ?? {}, result, quotaKind).catch((logError) => {
+          console.error("[article/generate] failed to record generation log:", logError);
+        });
         sendJson(response, 200, { ...result, quota });
       } catch (error) {
         const message = error instanceof Error ? error.message : "ARTICLE_GENERATE_FAILED";
