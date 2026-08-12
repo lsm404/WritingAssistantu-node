@@ -74,6 +74,7 @@ import {
   updateAgent,
 } from "./agent-service.js";
 import { checkYtDlpAvailable, parseVideoUrl, parseVideoUrlAuto } from "./video-parse-service.js";
+import { buildSignedVideoDownloadPath, proxyVideoDownload } from "./video-download-proxy.js";
 import { getUserPrompts, createUserPrompt, updateUserPrompt, deleteUserPrompt } from "./prompt-service.js";
 import { getUserWechatAccounts, replaceUserWechatAccounts } from "./wechat-accounts-service.js";
 
@@ -200,6 +201,11 @@ const ERROR_MESSAGE_MAP = {
   DOUYIN_API_PARSE_FAILED: "抖音视频解析失败，请稍后再试",
   KUAISHOU_VIDEO_ID_NOT_FOUND: "无法从快手链接中提取视频 ID",
   KUAISHOU_API_PARSE_FAILED: "快手视频解析失败，请稍后再试",
+  VIDEO_DOWNLOAD_LINK_INVALID: "视频下载链接无效或已过期，请重新解析",
+  VIDEO_DOWNLOAD_URL_INVALID: "视频源地址无效",
+  VIDEO_DOWNLOAD_URL_FORBIDDEN: "视频源地址不允许访问",
+  VIDEO_DOWNLOAD_UPSTREAM_UNREACHABLE: "无法连接视频源，请稍后再试",
+  VIDEO_DOWNLOAD_TOO_MANY_REDIRECTS: "视频源重定向次数过多",
 };
 
 const MIME_TYPES = {
@@ -374,6 +380,50 @@ function sendText(response, statusCode, contentType, body, filename) {
 
   response.writeHead(statusCode, headers);
   response.end(body);
+}
+
+function getVideoProxyBaseUrl(request) {
+  const configured = process.env.VIDEO_PROXY_BASE_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+
+  const forwardedProto = String(request.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim();
+  const forwardedHost = String(request.headers["x-forwarded-host"] || "")
+    .split(",")[0]
+    .trim();
+  const protocol = forwardedProto || "https";
+  const host = forwardedHost || request.headers.host || "xiezuozhushou.site";
+  return `${protocol}://${host}`;
+}
+
+function withProxyDownloadUrls(result, request) {
+  const baseUrl = getVideoProxyBaseUrl(request);
+  const formats = Array.isArray(result.formats)
+    ? result.formats.map((format) => {
+        const sourceUrl = format.url;
+        const proxyUrl = new URL(buildSignedVideoDownloadPath(sourceUrl), baseUrl).toString();
+        return {
+          ...format,
+          source_url: sourceUrl,
+          url: proxyUrl,
+          download_url: proxyUrl,
+        };
+      })
+    : [];
+
+  return { ...result, formats, formats_count: formats.length };
+}
+
+function withAdditionalProxyDownloadUrls(result, request) {
+  const baseUrl = getVideoProxyBaseUrl(request);
+  const formats = Array.isArray(result.formats)
+    ? result.formats.map((format) => ({
+        ...format,
+        download_url: new URL(buildSignedVideoDownloadPath(format.url), baseUrl).toString(),
+      }))
+    : [];
+  return { ...result, formats, formats_count: formats.length };
 }
 
 function getScope(raw) {
@@ -876,7 +926,10 @@ const server = http.createServer(async (request, response) => {
           proxy: body?.proxy,
           userAgent: body?.userAgent,
         });
-        sendJson(response, 200, { ok: true, data: result });
+        sendJson(response, 200, {
+          ok: true,
+          data: withAdditionalProxyDownloadUrls(result, request),
+        });
       } catch (error) {
         const rawMsg = error instanceof Error ? error.message : String(error);
         let errorCode = rawMsg;
@@ -2049,7 +2102,10 @@ const server = http.createServer(async (request, response) => {
           proxy: process.env.HTTP_PROXY || undefined,
         });
 
-        sendJson(response, 200, { ok: true, data: result });
+        sendJson(response, 200, {
+          ok: true,
+          data: withProxyDownloadUrls(result, request),
+        });
       } catch (error) {
         const msg = error instanceof Error ? error.message : "VIDEO_PARSE_FAILED";
         const code = msg.startsWith("VIDEO_PARSE_FAILED") ? "VIDEO_PARSE_FAILED" : msg;
@@ -2062,6 +2118,27 @@ const server = http.createServer(async (request, response) => {
                 ? 504
                 : 500;
         sendJson(response, statusCode, { error: code });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/v1/miniapp/video/download") {
+      try {
+        await proxyVideoDownload(request, response, requestUrl);
+      } catch (error) {
+        if (response.headersSent) {
+          response.destroy(error instanceof Error ? error : undefined);
+          return;
+        }
+        const message = error instanceof Error ? error.message : "VIDEO_DOWNLOAD_FAILED";
+        const statusCode =
+          message === "VIDEO_DOWNLOAD_LINK_INVALID" || message === "VIDEO_DOWNLOAD_URL_FORBIDDEN"
+            ? 403
+            : message === "VIDEO_DOWNLOAD_URL_INVALID"
+              ? 400
+              : 502;
+        console.error("[miniapp/video/download] failed:", message);
+        sendJson(response, statusCode, { error: message });
       }
       return;
     }

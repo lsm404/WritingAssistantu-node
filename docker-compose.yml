@@ -27,6 +27,8 @@ services:
       # 数据库连接（内部网络互相访问）
       - DATABASE_URL=postgresql://postgres:YourStrongPassword123!@db:5432/openclaw?schema=public
       - PORT=3100
+      - VIDEO_PROXY_SECRET=${VIDEO_PROXY_SECRET}
+      - VIDEO_PROXY_BASE_URL=${VIDEO_PROXY_BASE_URL:-https://xiezuozhushou.site}
       
       # 大模型配置
       - ARK_API_KEY=""
