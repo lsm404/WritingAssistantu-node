@@ -73,6 +73,7 @@ import {
   listAgentsWithStats,
   updateAgent,
 } from "./agent-service.js";
+import { checkYtDlpAvailable, parseVideoUrl, parseVideoUrlAuto } from "./video-parse-service.js";
 import { getUserPrompts, createUserPrompt, updateUserPrompt, deleteUserPrompt } from "./prompt-service.js";
 import { getUserWechatAccounts, replaceUserWechatAccounts } from "./wechat-accounts-service.js";
 
@@ -190,6 +191,15 @@ const ERROR_MESSAGE_MAP = {
   ACTIVATION_CODE_ALREADY_USED: "该激活码已被使用",
   ACTIVATION_CODE_GENERATION_FAILED: "激活码生成失败",
   DATABASE_URL_MISSING: "数据库连接未配置",
+  VIDEO_URL_REQUIRED: "请提供视频链接",
+  INVALID_VIDEO_URL: "视频链接格式不正确",
+  YT_DLP_NOT_FOUND: "服务器未安装 yt-dlp 解析引擎，请先在服务器安装 yt-dlp 或配置 YT_DLP_PATH 环境变量",
+  VIDEO_PARSE_TIMEOUT: "视频解析超时，请稍后再试",
+  VIDEO_PARSE_FAILED: "视频解析失败，请检查视频链接有效性或稍后再试",
+  DOUYIN_VIDEO_ID_NOT_FOUND: "无法从抖音链接中提取视频 ID",
+  DOUYIN_API_PARSE_FAILED: "抖音视频解析失败，请稍后再试",
+  KUAISHOU_VIDEO_ID_NOT_FOUND: "无法从快手链接中提取视频 ID",
+  KUAISHOU_API_PARSE_FAILED: "快手视频解析失败，请稍后再试",
 };
 
 const MIME_TYPES = {
@@ -830,6 +840,65 @@ const server = http.createServer(async (request, response) => {
             ? 400
             : 500;
         sendJson(response, statusCode, { error: message, detail: message });
+      }
+      return;
+    }
+
+    // Video parse routes (yt-dlp)
+    if (method === "GET" && pathname === "/api/v1/video/status") {
+      try {
+        const status = await checkYtDlpAvailable();
+        sendJson(response, 200, { ok: true, status });
+      } catch (error) {
+        sendJson(response, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/v1/video/parse") {
+      let body;
+      try {
+        body = await readJsonBody(request);
+      } catch (error) {
+        if (error instanceof Error && error.message === "INVALID_JSON") {
+          sendJson(response, 400, { error: "INVALID_JSON" });
+          return;
+        }
+        throw error;
+      }
+
+      try {
+        const videoUrl = body?.url || body?.videoUrl;
+        const result = await parseVideoUrl(videoUrl, {
+          proxy: body?.proxy,
+          userAgent: body?.userAgent,
+        });
+        sendJson(response, 200, { ok: true, data: result });
+      } catch (error) {
+        const rawMsg = error instanceof Error ? error.message : String(error);
+        let errorCode = rawMsg;
+        let detail = null;
+
+        if (rawMsg.startsWith("VIDEO_PARSE_FAILED:")) {
+          errorCode = "VIDEO_PARSE_FAILED";
+          detail = rawMsg.replace("VIDEO_PARSE_FAILED:", "").trim();
+        }
+
+        const statusCode =
+          errorCode === "VIDEO_URL_REQUIRED" || errorCode === "INVALID_VIDEO_URL"
+            ? 400
+            : errorCode === "YT_DLP_NOT_FOUND"
+              ? 503
+              : 500;
+
+        sendJson(response, statusCode, {
+          ok: false,
+          error: errorCode,
+          detail: detail || undefined,
+        });
       }
       return;
     }
@@ -1953,6 +2022,56 @@ const server = http.createServer(async (request, response) => {
       } catch (error) {
         const message = error instanceof Error ? error.message : "FETCH_USERS_FAILED";
         sendJson(response, message === "UNAUTHORIZED" ? 401 : 500, { error: message });
+      }
+      return;
+    }
+
+    // ===== 视频解析 - 小程序及公开接口 =====
+    if (method === "POST" && pathname === "/api/v1/miniapp/video/parse") {
+      try {
+        const body = await readJsonBody(request);
+        const videoUrl = String(body?.url || "").trim();
+
+        if (!videoUrl) {
+          sendJson(response, 400, { error: "VIDEO_URL_REQUIRED" });
+          return;
+        }
+
+        try {
+          new URL(videoUrl);
+        } catch {
+          sendJson(response, 400, { error: "INVALID_VIDEO_URL" });
+          return;
+        }
+
+        const result = await parseVideoUrlAuto(videoUrl, {
+          timeout: 45000,
+          proxy: process.env.HTTP_PROXY || undefined,
+        });
+
+        sendJson(response, 200, { ok: true, data: result });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "VIDEO_PARSE_FAILED";
+        const code = msg.startsWith("VIDEO_PARSE_FAILED") ? "VIDEO_PARSE_FAILED" : msg;
+        const statusCode =
+          code === "VIDEO_URL_REQUIRED" || code === "INVALID_VIDEO_URL"
+            ? 400
+            : code === "YT_DLP_NOT_FOUND"
+              ? 503
+              : code === "VIDEO_PARSE_TIMEOUT"
+                ? 504
+                : 500;
+        sendJson(response, statusCode, { error: code });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/v1/video/health") {
+      try {
+        const result = await checkYtDlpAvailable();
+        sendJson(response, result.available ? 200 : 503, result);
+      } catch (error) {
+        sendJson(response, 500, { error: "INTERNAL_SERVER_ERROR" });
       }
       return;
     }
